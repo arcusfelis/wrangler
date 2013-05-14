@@ -94,7 +94,7 @@ transform(#args{current_file_name=File, user_inputs=[RawRecName, RecDefFilePath]
                   || FieldForm <- erl_syntax:tuple_elements(FieldForms)],
     FieldDefVals = [maybe_value(to_term(erl_syntax:record_field_value(FieldForm)))
                   || FieldForm <- erl_syntax:tuple_elements(FieldForms)],
-    io:format("Record #~p{~p}", [RecName, lists:zip(FieldNames, FieldDefVals)]),
+%   io:format("Record #~p{~p}", [RecName, lists:zip(FieldNames, FieldDefVals)]),
     ?FULL_TD_TP([rule1(RecName, FieldNames, FieldDefVals)],
                 [File]).
 
@@ -102,12 +102,9 @@ transform(#args{current_file_name=File, user_inputs=[RawRecName, RecDefFilePath]
 rule1(RecName, FieldNames, FieldDefVals)
     when is_atom(RecName), is_list(FieldNames), is_list(FieldDefVals) ->
     ?RULE(?T("{RecName@, Args@@}"), 
-          begin
-          io:format("RecName@: ~p~n Args@@ ~p~n", [RecName@, Args@@]),
           case api_refac:syntax_category(_This@) of
               pattern -> replace_pattern(RecName, FieldNames, Args@@);
               _       -> replace_expr(RecName, FieldNames, FieldDefVals, Args@@)
-          end
           end,
           wrangler_syntax:type(RecName@) =:= atom andalso
           wrangler_syntax:atom_value(RecName@) =:= RecName
