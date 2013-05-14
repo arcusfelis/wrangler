@@ -7,6 +7,15 @@
 %% Include files
 -include_lib("wrangler/include/wrangler.hrl").
 
+-record(rec_field, {
+        index,
+        var_pos,
+        def_pos,
+        rec_pos,
+        parent_rec_pos
+        }).
+        
+
 %%%===================================================================
 %% gen_refac callbacks
 -export([input_par_prompts/0,
@@ -115,6 +124,9 @@ transform(#args{current_file_name=File, user_inputs=[RawRecName, RecDefFilePath]
                 )],
                 [File]),
 
+    RecPos2Form = [{pos(Rec), Rec} || Rec <- RecExprs],
+    RecPos2FormDict = dict:from_list(RecPos2Form),
+
     %% Convert `FieldValue''s position to `Rec''s position.
     %% `FieldValue' is a variable.
     %%
@@ -128,19 +140,69 @@ transform(#args{current_file_name=File, user_inputs=[RawRecName, RecDefFilePath]
             is_var(FieldValue)],
     FieldValuePos2RecPosDict = dict:from_list(FieldValuePos2RecPos),
 
+    FieldVarPos2FieldPos =
+        [{pos(VarForm), pos(Rec)}
+         || Rec <- RecExprs,
+            Field <- wrangler_syntax:record_expr_fields(Rec),
+            VarForm <- variables(field_value(Field))],
+    FieldVarPos2FieldPosDict = dict:from_list(FieldVarPos2FieldPos),
+
     %% `Fields' are a tuple of forms.
     RecPos2Fields =
         [{pos(Rec), record_fields(Rec, FieldNames)}
          || Rec <- RecExprs],
 
+    %% Contains variable define positions.
     RecPos2FieldBindings =
         [{RecPos, field_bindings(FieldForms)}
          || {RecPos, FieldForms} <- RecPos2Fields],
 
+    RecPos2FieldBindingsDict = dict:from_list(RecPos2FieldBindings),
+
+    RecPos2FieldParentRecPos =
+        [{RecPos, field_parent_records(FieldBindings, FieldVarPos2FieldPosDict)}
+         || {RecPos, FieldBindings} <- RecPos2FieldBindings],
+
+    RecPos2ParentRecPos =
+        [{RecPos, ParentRecPos}
+         || {RecPos, FieldParRecs} <- RecPos2FieldParentRecPos,
+            ParentRecPos <- [select_parent_record(RecPos, FieldParRecs, 2)],
+            ParentRecPos =/= undefined],
+
+    RecPos2ParentRecPosDict = dict:from_list(RecPos2ParentRecPos),
+
+    %% Positions of records to add `Arg'.
+    RecPosToUpdate = 
+        [RecPos
+         || {RecPos, _ParentRec} <- RecPos2ParentRecPos,
+            not has_argument(RecPos, RecPos2FormDict)],
+
+    RecPosToUpdateSet = sets:from_list(RecPosToUpdate),
+    ToDelete =
+        [{RecPos, FieldN, ParRecPos, VarPos}
+         || {RecPos, FieldParRecs} <- RecPos2FieldParentRecPos,
+            sets:is_element(RecPos, RecPosToUpdateSet),
+            
+            ParRecPos <- [dict:fetch(RecPos, RecPos2ParentRecPosDict)],
+            FieldBindings <- [dict:fetch(RecPos, RecPos2FieldBindingsDict)],
+            {FieldN, FieldParRecPos, [VarPos|_]} <- lists:zip3(
+                    lists:seq(1, tuple_size(FieldParRecs)),
+                    tuple_to_list(FieldParRecs),
+                    tuple_to_list(FieldBindings)),
+            ParRecPos =:= FieldParRecPos],
+
+
+
     io:format("FieldValuePos2RecPos ~p~n", [FieldValuePos2RecPos]),
-    io:format("RecExprs ~p~n", [RecExprs]),
-    io:format("RecPos2Fields ~p~n", [RecPos2Fields]),
+%   io:format("RecExprs ~p~n", [RecExprs]),
+%   io:format("RecPos2Fields ~p~n", [RecPos2Fields]),
     io:format("RecPos2FieldBindings ~p~n", [RecPos2FieldBindings]),
+    io:format("RecPos2FieldParentRecPos ~p~n", [RecPos2FieldParentRecPos]),
+%   io:format("RecPos2ParentRec ~p~n", [RecPos2ParentRec]),
+    io:format("RecPos2ParentRecPos ~p~n", [RecPos2ParentRecPos]),
+    io:format("RecPosToUpdate ~p~n", [RecPosToUpdate]),
+    io:format("ToDelete ~p~n", [ToDelete]),
+
 
     ?FULL_TD_TP([rule1(RecName, FieldNames, FieldDefVals)],
                 [File]).
@@ -267,25 +329,12 @@ is_record_attr(Form, RecName) ->
 %% Return a tuple `{Field1, Field2, ...}'.
 %% A special case is `#rec{f1 = V1, f1 = V2}'.
 %% A special case is `#rec{_ = V1}'.
+%% Only the last variable will be binded.
 record_fields(Rec, FieldNames) when is_list(FieldNames) ->
     FieldCount = length(FieldNames),
     Fields = wrangler_syntax:record_expr_fields(Rec),
     Tuple = list_to_tuple(lists:duplicate(FieldCount, undefined)),
     apply_fields(Fields, FieldNames, Tuple).
-
-field_bindings(FieldForms) when is_tuple(FieldForms) ->
-    list_to_tuple([field_binding(FieldForm)
-                   || FieldForm <- tuple_to_list(FieldForms)]).
-
-field_binding(undefined) -> undefined;
-field_binding(FieldForm) ->
-    ValueForm = field_value(FieldForm),
-    case type(ValueForm) of
-        variable -> {variable, api_refac:variable_define_pos(ValueForm)};
-        _        -> other
-    end.
-
-
 
 apply_fields([Field|Fields], FieldNames, Tuple) ->
     Tuple2 =
@@ -302,6 +351,51 @@ apply_fields([Field|Fields], FieldNames, Tuple) ->
 apply_fields([], _FieldNames, Tuple) ->
     Tuple.
 
+
+field_bindings(FieldForms) when is_tuple(FieldForms) ->
+    list_to_tuple([field_binding(FieldForm)
+                   || FieldForm <- tuple_to_list(FieldForms)]).
+
+field_binding(undefined) -> undefined;
+field_binding(FieldForm) ->
+    ValueForm = field_value(FieldForm),
+    field_value_binding(ValueForm).
+
+field_value_binding(ValueForm) ->
+    case type(ValueForm) of
+        match_expr ->
+            P = wrangler_syntax:match_expr_pattern(ValueForm),
+            B = wrangler_syntax:match_expr_body(ValueForm),
+            case field_value_binding(P) of
+                undefined -> field_value_binding(B);
+                Var -> Var
+            end;
+        variable -> api_refac:variable_define_pos(ValueForm);
+        _        -> undefined
+    end.
+
+
+variables(ExprForm) ->
+    case type(ExprForm) of
+        match_expr ->
+            P = wrangler_syntax:match_expr_pattern(ExprForm),
+            B = wrangler_syntax:match_expr_body(ExprForm),
+            variables(P) ++ variables(B);
+        variable -> [ExprForm];
+        _        -> []
+    end.
+
+
+field_parent_records(FieldBindings, FieldVarPos2FieldPosDict) ->
+    list_to_tuple([field_parent_record(FieldBinding, FieldVarPos2FieldPosDict)
+                   || FieldBinding <- tuple_to_list(FieldBindings)]).
+
+field_parent_record([Pos|_], FieldVarPos2FieldPosDict) ->
+    case dict:find(Pos, FieldVarPos2FieldPosDict) of
+        {ok, ParentRecPos} -> ParentRecPos;
+        error -> undefined
+    end.
+
 elem_pos(H, L) ->
     elem_pos(H, L, 1).
 
@@ -311,3 +405,46 @@ elem_pos(H, [_|T], N) ->
     elem_pos(H, T, N+1);
 elem_pos(_, [], _) ->
     undefined.
+
+
+%% Thresthold means after how many usage to use update.
+select_parent_record(RecPos, FieldParRecTuple, Thresthold) ->
+    FieldParRecs = tuple_to_list(FieldParRecTuple),
+    StatsDict = collect_usage_stats(RecPos, FieldParRecs),
+    case dict_entry_with_highest_value(StatsDict) of
+        {undefined, undefined}               -> undefined;
+        {MaxK, MaxV} when MaxV >= Thresthold -> MaxK;
+        _                                    -> undefined
+    end.
+
+collect_usage_stats(RecPos, FieldParRecs) ->
+    collect_usage_stats(RecPos, FieldParRecs, dict:new()).
+
+%% Stats contains mapping from RecPos to usage count as a field value.
+collect_usage_stats(RecPos, [RecPos|FieldParRecs], Stats) ->
+    %% Skip self.
+    collect_usage_stats(RecPos, FieldParRecs, Stats);
+collect_usage_stats(RecPos, [ParRecPos|FieldParRecs], Stats) ->
+    Stats2 = dict:update_counter(ParRecPos, 1, Stats),
+    collect_usage_stats(RecPos, FieldParRecs, Stats2);
+collect_usage_stats(_RecPos, [], Stats) ->
+    Stats.
+
+dict_entry_with_highest_value(Dict) ->
+    %% Return maximum value of 
+    F = fun(K, V, {undefined, undefined})      -> {K, V};
+           (K, V, {_MaxK, MaxV}) when V > MaxV -> {K, V};
+           (_, _, Acc)                         -> Acc
+    end,
+    dict:fold(F, {undefined, undefined}, Dict).
+
+
+%% @doc Is a record with RecPos has an argument?
+%% `Arg#rec{}' - Arg is an argument.
+has_argument(RecPos, RecPos2FormDict) ->
+    case dict:find(RecPos, RecPos2FormDict) of
+        {ok, RecForm} ->
+            wrangler_syntax:record_expr_argument(RecForm) =/= none;
+        error ->
+            error({key_not_found, RecPos})
+    end.
