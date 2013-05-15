@@ -301,8 +301,9 @@ bind_record(ParRecPos2NewBindDict, RecPos, Rec) ->
     %% pos(Rec) /= RecPos
     case dict:find(RecPos, ParRecPos2NewBindDict) of
         {ok, VarName} ->
-            VarForm = wrangler_syntax:variable(VarName),
-            wrangler_syntax:match_expr(VarForm, Rec);
+            VarForm  = wrangler_syntax:variable(VarName),
+            ExprForm = wrangler_syntax:match_expr(VarForm, Rec),
+            wrangler_syntax:fake_parentheses(ExprForm);
         error -> Rec
     end.
 

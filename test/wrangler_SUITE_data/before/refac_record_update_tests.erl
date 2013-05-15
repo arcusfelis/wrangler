@@ -1,5 +1,5 @@
 -module(refac_record_update_tests).
--export([ex/2, ex1/1, ex2/1, ex3/1, ex4/0, ex5/1, ex6/1, ex7/1, ex8/1]).
+-export([ex/2, ex1/1, ex2/1, ex3/1, ex4/0, ex5/1, ex6/1, ex7/1, ex8/1, ex9/0]).
 
 -record(xmlel, {name, children = [], attrs = []}).
 
@@ -41,3 +41,7 @@ ex7(El) ->
 
 ex8(#xmlel{name = _N, children = C, attrs = A}) ->
     #xmlel{name = <<"mess">>, children = C, attrs = A}.
+
+ex9() ->
+    #xmlel{children = C, attrs = A} =  somewhere:something(),
+    #xmlel{name = <<"new">>, children = C, attrs = A}.
