@@ -92,37 +92,56 @@ transform(#args{current_file_name=File, user_inputs=[RawRecName, RecDefFilePath]
     [_NameForm, FieldForms] = erl_syntax:attribute_arguments(RecAttrForm),
     FieldNames = [erl_syntax:atom_value(erl_syntax:record_field_name(FieldNameForm))
                   || FieldNameForm <- erl_syntax:tuple_elements(FieldForms)],
-    ?FULL_TD_TP([rule1(RecName, FieldNames)],
+    FieldDefVals = [maybe_value(to_term(erl_syntax:record_field_value(FieldForm)))
+                  || FieldForm <- erl_syntax:tuple_elements(FieldForms)],
+    ?FULL_TD_TP([rule1(RecName, FieldNames, FieldDefVals)],
                 [File]).
 
 
-rule1(RecName, FieldNames) when is_atom(RecName), is_list(FieldNames) ->
+%% Private functions
+%%--------------------------------------------------------------------
+
+rule1(RecName, FieldNames, FieldDefVals)
+    when is_atom(RecName), is_list(FieldNames), is_list(FieldDefVals) ->
     ?RULE(?T("{RecName@, Args@@}"), 
-          begin
-            io:format(user, "RecName@ ~p~nArgs@@ ~p~n", [RecName@, Args@@]),
-            Fields = mk_record_fields(FieldNames, Args@@),
-            wrangler_syntax:record_expr(wrangler_syntax:atom(RecName), Fields)
+          case api_refac:syntax_category(_This@) of
+              pattern -> replace_pattern(RecName, FieldNames, Args@@);
+              _       -> replace_expr(RecName, FieldNames, FieldDefVals, Args@@)
           end,
           wrangler_syntax:type(RecName@) =:= atom andalso
           wrangler_syntax:atom_value(RecName@) =:= RecName
          ).
 
 
+replace_pattern(RecName, FieldNames, Args@@) ->
+    Fields = mk_record_fields(FieldNames, Args@@),
+    wrangler_syntax:record_expr(wrangler_syntax:atom(RecName), Fields).
+
+replace_expr(RecName, FieldNames, FieldDefVals, Args@@) ->
+    Fields = mk_record_fields(FieldNames, FieldDefVals, Args@@),
+    wrangler_syntax:record_expr(wrangler_syntax:atom(RecName), Fields).
+
+
 mk_record_field(Name, Val) ->
-        wrangler_syntax:record_field(
-             wrangler_syntax:atom(Name),
-             wrangler_syntax:remove_comments(Val)).
+    wrangler_syntax:record_field(
+         wrangler_syntax:atom(Name),
+         wrangler_syntax:remove_comments(Val)).
 
 mk_record_fields(RecordFields, Es) ->
-    [mk_record_field(Name, Val) || {Name, Val} <- lists:zip(RecordFields, Es),
+    [mk_record_field(Name, Val)
+     || {Name, Val} <- lists:zip(RecordFields, Es),
      wrangler_syntax:type(Val) =/= underscore,
      %% non-used _DontWorryVariable
-    not (leading_underscore_var(Val) andalso
+    not (is_leading_underscore_var(Val) andalso
          length(api_refac:var_refs(Val)) =:= 0)].
 
-leading_underscore_var(Var) ->
-    wrangler_syntax:type(Var) =:= variable
-    andalso $_ =:= hd(atom_to_list(wrangler_syntax:variable_name(Var))).
+%% This fun is the same as `mk_record_field/2', but deletes fields
+%% with default values.
+mk_record_fields(RecordFields, FieldDefVals, Es) ->
+    [mk_record_field(Name, Val)
+     || {Name, Val, Def} <- lists:zip3(RecordFields, Es, FieldDefVals),
+     wrangler_to_term(Val) =/= {value, Def},
+     wrangler_syntax:type(Val) =/= underscore].
 
 
 %% Metainfo helpers
@@ -160,3 +179,33 @@ is_record_attr(Form, RecName) ->
     catch error:_ ->
         false
     end.
+
+
+%% General helpers
+%% -------------------------------------------------------------------------
+
+%% @doc `Expr' is from `erl_syntax'.
+to_term(Expr) ->
+    Es = [erl_syntax:revert(Expr)],
+    try erl_eval:exprs(Es, [])
+    of {value, V, _} -> {value, V}
+    catch error:Reason -> {error, Reason}
+    end.
+
+
+%% @doc `Expr' is a wrangler AST.
+wrangler_to_term(Expr) ->
+    Es = [wrangler_syntax:revert(Expr)],
+    try erl_eval:exprs(Es, [])
+    of {value, V, _} -> {value, V}
+    catch error:Reason -> {error, Reason}
+    end.
+
+
+maybe_value({value, V})       -> V;
+maybe_value({error, _Reason}) -> undefined.
+
+
+is_leading_underscore_var(Var) ->
+    wrangler_syntax:type(Var) =:= variable
+    andalso $_ =:= hd(atom_to_list(wrangler_syntax:variable_name(Var))).
