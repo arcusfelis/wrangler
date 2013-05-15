@@ -6,3 +6,5 @@ elisp/wrangler.el
 *.beam
 *~
 tags
+logs
+src/wrangler_parse.erl
