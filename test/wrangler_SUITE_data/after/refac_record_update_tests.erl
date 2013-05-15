@@ -8,14 +8,14 @@ ex(C, A) ->
     #xmlel{name = N1, children = C, attrs = A}.
 
 ex1(XL = #xmlel{}) ->
-    XL#xmlel{}.
+    XL.
 
 ex2(XL = #xmlel{name = 1}) ->
-    XL#xmlel{}.
+    XL.
 
 ex3(El) ->
     #xmlel{} = El,
-    El#xmlel{}.
+    El.
 
 ex4() ->
     Child = #xmlel{name = x, children = [a,b], attrs = [{a,b}]},

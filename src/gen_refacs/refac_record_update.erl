@@ -285,7 +285,8 @@ transform(#args{current_file_name=File,
                                        Rec@),
                 Rec2 = delete_fields(FieldPosToDeleteSet, Rec1),
                 Rec3 = delete_field_vars(VarPosToDeleteSet, Rec2),
-                case bind_record(ParRecPos2NewBindDict, RecPos, Rec3) of
+                Rec4 = handle_empty_field_set(RecPosToUpdateSet, RecPos, Rec3),
+                case bind_record(ParRecPos2NewBindDict, RecPos, Rec4) of
                     Rec@ -> Rec@;
                     Updated -> rec_reset_pos_and_range(Updated)
                 end
@@ -357,6 +358,17 @@ reset_pos_and_range(Node) ->
     Node1 = wrangler_misc:update_ann(Node, {range, {{0,0},{0,0}}}),
     wrangler_syntax:set_pos(Node1, {0,0}).
 
+
+%% `Rec#rec{}' => `Rec'
+handle_empty_field_set(RecPosToUpdateSet, RecPos, RecForm) ->
+    case sets:is_element(RecPos, RecPosToUpdateSet) of
+        true ->
+            case wrangler_syntax:record_expr_fields(RecForm) of
+                [] -> wrangler_syntax:record_expr_argument(RecForm);
+                _  -> RecForm
+            end;
+        false -> RecForm
+    end.
 
 
 is_record_expr(RecForm, RecName) ->
