@@ -131,18 +131,6 @@ transform(#args{current_file_name=File,
     RecPos2Form = [{pos(Rec), Rec} || Rec <- RecExprs],
     RecPos2FormDict = dict:from_list(RecPos2Form),
 
-    %% Convert `FieldValue''s position to `Rec''s position.
-    %% `FieldValue' is a variable.
-    %%
-    %% Pseudocode.
-    %% `Rec#rec{field = FieldValue}'
-    FieldValuePos2RecPos =
-        [{pos(FieldValue), pos(Rec)}
-         || Rec <- RecExprs,
-            Field <- wrangler_syntax:record_expr_fields(Rec),
-            FieldValue <- [field_value(Field)],
-            is_var(FieldValue)],
-
     FieldPos2RecPos =
         [{pos(Field), pos(Rec)}
          || Rec <- RecExprs,
@@ -192,14 +180,14 @@ transform(#args{current_file_name=File,
     RecPos2FieldParentRecPos =
         [{RecPos, ParentRecPos}
          || {RecPos, FieldBindings} <- RecPos2FieldBindings,
-         ParentRecPos <- [field_parent_records(FieldBindings,
-                                               FieldVarPos2RecPosDict)],
-         ParentRecPos =/= undefined],
+         ParentRecPos <- as_list(field_parent_records(FieldBindings,
+                                                      FieldVarPos2RecPosDict))],
 
     RecPos2ParentRecPos =
         [{RecPos, ParentRecPos}
          || {RecPos, FieldParRecs} <- RecPos2FieldParentRecPos,
-            ParentRecPos <- [select_parent_record(RecPos, FieldParRecs, 2)]],
+            ParentRecPos <- as_list(select_parent_record(RecPos,
+                                                         FieldParRecs, 2))],
 
     RecPos2ParentRecPosDict = dict:from_list(RecPos2ParentRecPos),
 
@@ -271,7 +259,6 @@ transform(#args{current_file_name=File,
 %   io:format("RecExprs ~p~n", [RecExprs]),
 %   io:format("RecPos2Fields ~p~n", [RecPos2Fields]),
 %   io:format("RecPos2ParentRec ~p~n", [RecPos2ParentRec]),
-%   io:format("FieldValuePos2RecPos ~p~n", [FieldValuePos2RecPos]),
 %   io:format("RecPos2FieldBindings ~p~n", [RecPos2FieldBindings]),
 %   io:format("RecPos2FieldParentRecPos ~p~n", [RecPos2FieldParentRecPos]),
 %   io:format("RecPos2ParentRecPos ~p~n", [RecPos2ParentRecPos]),
@@ -298,7 +285,10 @@ transform(#args{current_file_name=File,
                                        Rec@),
                 Rec2 = delete_fields(FieldPosToDeleteSet, Rec1),
                 Rec3 = delete_field_vars(VarPosToDeleteSet, Rec2),
-                bind_record(ParRecPos2NewBindDict, RecPos, Rec3)
+                case bind_record(ParRecPos2NewBindDict, RecPos, Rec3) of
+                    Rec@ -> Rec@;
+                    Updated -> rec_reset_pos_and_range(Updated)
+                end
           end,
           is_record_expr(Rec@, RecName)
           andalso
@@ -308,7 +298,6 @@ transform(#args{current_file_name=File,
     ?FULL_BU_TP([Rule1], [File]).
 
 bind_record(ParRecPos2NewBindDict, RecPos, Rec) ->
-    io:format("RecPos ~p~n", [RecPos]),
     %% pos(Rec) /= RecPos
     case dict:find(RecPos, ParRecPos2NewBindDict) of
         {ok, VarName} ->
@@ -356,8 +345,17 @@ delete_field_vars(VarPosToDeleteSet, RecForm) ->
           sets:is_element(pos(V2@), VarPosToDeleteSet)
          ),
 
-    {ok, [OutForm]} = ?FULL_BU_TP([Rule1], [RecForm]),
+    {ok, OutForm} = ?FULL_BU_TP([Rule1], RecForm),
     OutForm.
+
+%% recursive
+rec_reset_pos_and_range(Node) ->
+    api_ast_traverse:map(fun reset_pos_and_range/1, Node).
+
+reset_pos_and_range(Node) ->
+    Node1 = wrangler_misc:update_ann(Node, {range, {{0,0},{0,0}}}),
+    wrangler_syntax:set_pos(Node1, {0,0}).
+
 
 
 is_record_expr(RecForm, RecName) ->
@@ -395,43 +393,9 @@ field_value(FieldForm) ->
     wrangler_syntax:record_field_value(FieldForm).
     
 
-mk_record_field(Name, Val) ->
-    wrangler_syntax:record_field(
-         wrangler_syntax:atom(Name),
-         wrangler_syntax:remove_comments(Val)).
-
-mk_record_fields(RecordFields, Es) ->
-    [mk_record_field(Name, Val)
-     || {Name, Val} <- lists:zip(RecordFields, Es),
-     type(Val) =/= underscore].
-
-%% This fun is the same as `mk_record_field/2', but deletes fields
-%% with default values.
-mk_record_fields(RecordFields, FieldDefVals, Es) ->
-    [mk_record_field(Name, Val)
-     || {Name, Val, Def} <- lists:zip3(RecordFields, Es, FieldDefVals),
-     wrangler_to_term(Val) =/= {value, Def},
-     type(Val) =/= underscore].
-
-%% @doc `Expr' is from `erl_syntax'.
-to_term(Expr) ->
-    Es = [erl_syntax:revert(Expr)],
-    try erl_eval:exprs(Es, [])
-    of {value, V, _} -> {value, V}
-    catch error:Reason -> {error, Reason}
-    end.
-
-maybe_value({value, V})       -> V;
-maybe_value({error, _Reason}) -> undefined.
-
-
-%% @doc `Expr' is a wrangler AST.
-wrangler_to_term(Expr) ->
-    Es = [wrangler_syntax:revert(Expr)],
-    try erl_eval:exprs(Es, [])
-    of {value, V, _} -> {value, V}
-    catch error:Reason -> {error, Reason}
-    end.
+%% This function is useful for list comprehensions.
+as_list(undefined) -> [];
+as_list(X) -> [X].
 
 
 %% Metainfo helpers
