@@ -101,19 +101,10 @@ transform(#args{current_file_name=File,
     FieldNames = [erl_syntax:atom_value(erl_syntax:record_field_name(FieldForm))
                   || FieldForm <- erl_syntax:tuple_elements(FieldDefForms)],
 
+    {ok, AST} = api_refac:get_ast(File),
+    
     %% This code is dirty and skips a lot of cases.
-    RecPos2Var = ?STOP_TD_TU([?COLLECT(?T("V1@ = V2@"), 
-                  %% Record => Var
-                  case is_var(V1@) of
-                        true  -> {pos(V2@), V1@};
-                        false -> {pos(V1@), V2@}
-                  end,
-                  (is_record_expr(V1@, RecName) andalso is_var(V2@))
-                   orelse 
-                  (is_record_expr(V2@, RecName) andalso is_var(V1@))
-                )],
-                [File]), 
-
+    RecPos2Var = find_record_bindings(AST, RecName),
     RecPos2VarDict = dict:from_list(RecPos2Var),
 
     RecExprs = ?STOP_TD_TU([?COLLECT(?T("Rec@"), 
@@ -643,4 +634,42 @@ dict_find_all(E, D) ->
     case dict:find(E, D) of
         {ok, V} -> [V];
         error -> []
+    end.
+
+
+-spec find_record_bindings(Tree, RecName) -> [{RecTree, VarTree}] when
+    Tree    :: syntaxTree(),
+    RecTree :: syntaxTree(),
+    VarTree :: syntaxTree(),
+    RecName :: atom().
+find_record_bindings(Tree, RecName) when is_tuple(Tree) ->
+    case type(Tree) of
+        match_expr ->
+            Matches = matches(Tree),
+            [{pos(Rec), Var} || Rec <- Matches, Var <- Matches,
+             is_record_expr(Rec, RecName), is_var(Var)]
+            ++
+            [{RecPos, Var} || SubTree <- Matches,
+             {RecPos, Var} <- find_record_bindings(SubTree, RecName)];
+        _ ->
+            [{RecPos, Var}
+             || SubTrees <- wrangler_syntax:subtrees(Tree),
+                SubTree <- SubTrees,
+                {RecPos, Var} <- find_record_bindings(SubTree, RecName)]
+    end.
+
+
+%% @doc Convert AST of a match tree to a list.
+%%
+%% Code: A = B = C.
+%% AST:  {A,{B,C}}
+%% List: [A,B,C]
+matches(Tree) ->
+    case type(Tree) of
+        match_expr ->
+            P = wrangler_syntax:match_expr_pattern(Tree),
+            B = wrangler_syntax:match_expr_body(Tree),
+            matches(P) ++ matches(B);
+        _ ->
+            [Tree]
     end.
