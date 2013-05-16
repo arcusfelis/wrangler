@@ -115,7 +115,7 @@ transform(#args{current_file_name=File,
                   {api_refac:start_end_loc(F@), api_refac:bound_var_names(F@)},
                   type(F@) =:= function_clause
                 )],
-                [File]),
+                AST),
 
     RecPos2Form = [{pos(Rec), Rec} || Rec <- RecExprs],
     RecPos2FormDict = dict:from_list(RecPos2Form),
