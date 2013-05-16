@@ -1,6 +1,6 @@
 -module(refac_record_update_tests).
 -export([ex/2, ex1/1, ex2/1, ex3/1, ex4/0, ex5/1, ex6/1, ex7/1, ex8/1, ex9/0,
-         ex10/1]).
+         ex10/1, ex11/1]).
 
 -record(xmlel, {name, children = [], attrs = []}).
 
@@ -49,3 +49,6 @@ ex9() ->
 
 ex10(X = _ = _ = #xmlel{name = N, children = C, attrs = A}) ->
     #xmlel{name = N, children = C, attrs = A}.
+
+ex11(#xmlel{name = N, children = [#xmlel{name = N1, attrs = A1, children = []}], attrs = A}) ->
+    #xmlel{name = N, children = [#xmlel{name = N1, attrs = A1}], attrs = A}.

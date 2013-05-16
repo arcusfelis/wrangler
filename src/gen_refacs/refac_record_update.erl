@@ -107,11 +107,9 @@ transform(#args{current_file_name=File,
     RecPos2Var = find_record_bindings(AST, RecName),
     RecPos2VarDict = dict:from_list(RecPos2Var),
 
-    RecExprs = ?STOP_TD_TU([?COLLECT(?T("Rec@"), 
-                  Rec@,
-                  is_record_expr(Rec@, RecName)
-                )],
-                [File]),
+    RecExprs = api_ast_traverse:fold(fun(Form, Acc) ->
+                    [Form || is_record_expr(Form, RecName)] ++ Acc
+            end, [], AST),
 
     FunClauseRangesAndVarNames = ?STOP_TD_TU([?COLLECT(?T("F@"), 
                   {api_refac:start_end_loc(F@), api_refac:bound_var_names(F@)},
