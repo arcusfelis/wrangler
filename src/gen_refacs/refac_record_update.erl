@@ -1,5 +1,8 @@
+%% @doc This module tries to add an argument to a record expression.
+%% After that, it deletes unused fields.
 %% @hidden
 %% @private
+%% @author Uvarov Michael <arcusfelis@gmail.com>
 -module(refac_record_update).
 
 -behaviour(gen_refac).

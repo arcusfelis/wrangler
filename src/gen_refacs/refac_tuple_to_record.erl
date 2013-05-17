@@ -1,5 +1,7 @@
+%% @doc This module converts tuples into records.
 %% @hidden
 %% @private
+%% @author Uvarov Michael <arcusfelis@gmail.com>
 -module(refac_tuple_to_record).
 
 -behaviour(gen_refac).
