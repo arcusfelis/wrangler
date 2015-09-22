@@ -7,14 +7,17 @@ consult(Filename) ->
     FileFormat = wrangler_misc:file_format(Filename),
     TabWidth = 4,
     {ok, Bin} = file:read_file(Filename),
-    Terms = parse_terms(Bin, TabWidth, FileFormat),
-    Str = erlang:iolist_to_binary(add_auto_funs(Terms, FileFormat)),
+    Str = erlang:binary_to_list(Bin),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Exprs = replace_dots_with_comma_keep_last(Toks),
+    Str2 = erlang:iolist_to_binary("consult()->" ++ wrangler_misc:concat_toks(Exprs)),
     TmpFilename = tmp_filenate(),
-    ok = file:write_file(TmpFilename, Str),
+    ok = file:write_file(TmpFilename, Str2),
     FileFormat = wrangler_misc:file_format(TmpFilename),
     {ok, {AnnAST,_Info}} = wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
-    AnnTrees = unlift_funs_from_ast(AnnAST),
-    {ok, AnnTrees}.
+%   AnnTrees = unlift_fun(AnnAST),
+%   {ok, AnnTrees}.
+    {ok, AnnAST}.
 
 unlift_funs_from_ast(AnnAST) ->
     Elems = wrangler_syntax:form_list_elements(AnnAST),
@@ -35,97 +38,39 @@ write_file(FilenameOrig, AnnAST) ->
 write_file(FilenameOrig, FileNameOut, AnnAST) ->
     TabWidth = 4,
     FileFormat = wrangler_misc:file_format(FilenameOrig),
-    Bin2 = list_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
-    Terms2 = parse_terms(Bin2, TabWidth, FileFormat),
-    Bin = iolist_to_binary(rem_auto_funs(Terms2, FileFormat)),
-    file:write_file(FileNameOut, Bin).
+    Bin = list_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
+    Bin2 = replace_commas_with_dots(Bin, TabWidth, FileFormat),
+    <<"consult()->", Bin3/binary>>  = Bin2,
+    file:write_file(FileNameOut, Bin3).
 
 tmp_filenate() ->
     string:strip(os:cmd("mktemp"), right, $\n).
 
-parse_terms(Bin, TabWidth, FileFormat) ->
-    Str = erlang:binary_to_list(Bin),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    split_by_dot(Toks).
 
-%% Return a list of expression lists
-split_by_dot(Toks) ->
-    split_by_dot2(Toks, []).
+replace_dots_with_comma_keep_last(Toks) when is_list(Toks) ->
+    Count = count_dots(Toks),
+    Limit = Count - 1,
+    replace_dots_with_comma(Toks, Limit).
 
-split_by_dot2([{dot,_}=Dot|Toks], Acc) ->
-    Acc2 = [Dot|Acc],
-    [lists:reverse(Acc2)|split_by_dot(Toks)];
-split_by_dot2([Tok|Toks], Acc) ->
-    split_by_dot2(Toks, [Tok|Acc]);
-split_by_dot2([], []) ->
-    [];
-split_by_dot2([], Acc) ->
-    [lists:reverse(Acc)].
+count_dots(Toks) ->
+    count_dots(Toks, 0).
 
+count_dots([{dot,_}|Toks], Count) ->
+    count_dots(Toks, Count+1);
+count_dots([_|Toks], Count) ->
+    count_dots(Toks, Count);
+count_dots([], Count) ->
+    Count.
 
-%% Convert expressions into forms by adding `auto_00001() ->'
-add_auto_funs(ExprList, FileFormat) ->
-    Sep = get_delimitor(FileFormat),
-    add_auto_funs(ExprList, Sep, 1).
-
-add_auto_funs([Exprs|ExprList], Sep, N) ->
-    case ends_with_dot(Exprs) of
-        true ->
-            %% Add three extra lines (new line, fun def, new line)
-            Str = io_lib:format("~s~s()->~s", [Sep, fun_name(N), Sep])
-                ++ wrangler_misc:concat_toks(Exprs),
-            [Str|add_auto_funs(ExprList, Sep, N+1)];
-        false ->
-            Str = wrangler_misc:concat_toks(Exprs),
-            [Str|add_auto_funs(ExprList, Sep, N)]
-    end;
-add_auto_funs([], _Sep, _N) ->
-    [].
-
-
-rem_auto_funs(ExprList, FileFormat) ->
-    Sep = get_delimitor(FileFormat),
-    remove_auto_funs(ExprList, Sep).
-
-remove_auto_funs([Exprs|ExprList], Sep) ->
-    case ends_with_dot(Exprs) of
-        true ->
-            %% Add three extra lines (new line, fun def, new line)
-            Str = remove_auto_fun(wrangler_misc:concat_toks(Exprs), Sep),
-            [Str|remove_auto_funs(ExprList, Sep)];
-        false ->
-            Str = wrangler_misc:concat_toks(Exprs),
-            [Str|remove_auto_funs(ExprList, Sep)]
-    end;
-remove_auto_funs([], _Sep) ->
-    [].
-
-remove_auto_fun(I, Sep) ->
-    B = erlang:iolist_to_binary(I),
-    Str = erlang:binary_to_list(B),
-    Str2 = remove_separator(Str, Sep),
-    Str3 = remove_auto_fun_body(Str2),
-    remove_separator(Str3, Sep).
-
-remove_separator([H|Str], [H|Sep]) ->
-    remove_separator(Str, Sep);
-remove_separator(Str, []) ->
-    Str.
-
-remove_auto_fun_body([$c, $o, $n, $s, $u, $l, $t, $_, _, _, _, _, _, $(, $), $-, $> | Str]) ->
-    Str.
-
-fun_name(N) when is_integer(N) ->
-   L = io_lib:format("consult_~5..0B", [N]),
-   B = erlang:iolist_to_binary(L),
-   erlang:binary_to_list(B).
-
-ends_with_dot([{dot,_}]) ->
-    true;
-ends_with_dot([_|T]) ->
-    ends_with_dot(T);
-ends_with_dot(_) ->
-    false.
+%% The second argument Limit limits number of dots to be replaced
+replace_dots_with_comma(Toks, 0) ->
+    Toks;
+replace_dots_with_comma([{dot,Pos}|Toks], Limit) ->
+    [{',', Pos}|replace_dots_with_comma(Toks, Limit-1)];
+replace_dots_with_comma([Tok|Toks], Limit) ->
+    [Tok|replace_dots_with_comma(Toks, Limit)];
+replace_dots_with_comma([], _Limit) ->
+    ok.
 
 get_delimitor(FileFormat) ->
     case FileFormat of
@@ -133,3 +78,57 @@ get_delimitor(FileFormat) ->
         mac -> "\r";
         unix -> "\n"
     end.
+
+%% Replaces dots on the top level only
+replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
+    %% Get actual AST
+    TmpFilename = tmp_filenate(),
+    ok = file:write_file(TmpFilename, Bin),
+    {ok, {AnnAST,_Info}} = wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
+    Str = erlang:binary_to_list(Bin),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    FunAST = hd(wrangler_syntax:form_list_elements(AnnAST)),
+    ClauseAST = hd(wrangler_syntax:function_clauses(FunAST)),
+    ExprASTs = wrangler_syntax:clause_body(ClauseAST),
+    EndLocs = [get_range_end(ExprAST) || ExprAST <- ExprASTs],
+    ExpectedCommasLocs = shift_right_locs(EndLocs),
+
+    io:format("~nComLocs ~10000p ~nEndLocs ~10000p ~n", [comma_locs(Toks), EndLocs]),
+
+    Toks2 = replace_commas(Toks, ExpectedCommasLocs),
+    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks2)).
+
+%% Replace commans based on their location
+replace_commas([{',', CommaLoc}|Toks], MatchLocs) ->
+    case lists:member(CommaLoc, MatchLocs) of
+        true ->
+            [{dot, CommaLoc}|replace_commas(Toks, MatchLocs)];
+        false ->
+            [{',', CommaLoc}|replace_commas(Toks, MatchLocs)]
+    end;
+replace_commas([Tok|Toks], MatchLocs) ->
+    [Tok|replace_commas(Toks, MatchLocs)];
+replace_commas([], _MatchLocs) ->
+    [].
+
+shift_right_locs(Locs) ->
+    lists:map(fun shift_right_loc/1, Locs).
+
+shift_right_loc({Vert,Horiz}) ->
+    {Vert,Horiz+1}.
+
+comma_locs([{',',CommaLoc}|Toks]) ->
+    [CommaLoc|comma_locs(Toks)];
+comma_locs([_|Toks]) ->
+    comma_locs(Toks);
+comma_locs([]) ->
+    [].
+
+get_range(Node) ->
+     As = wrangler_syntax:get_ann(Node),
+     {value, {range, {S, E}}} = lists:keysearch(range, 1, As),
+     {S, E}.
+
+get_range_end(Node) ->
+    {_S, E} = get_range(Node),
+    E.
