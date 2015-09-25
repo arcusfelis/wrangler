@@ -121,13 +121,21 @@ tmp_filenate() ->
     string:strip(os:cmd("mktemp"), right, $\n).
 
 term_to_tokens(Value, TabWidth, FileFormat) ->
-    Io = io_lib:format("~p", [Value]),
-    Bin = erlang:iolist_to_binary(Io),
-    Str = erlang:binary_to_list(Bin),
+    Str = pretty_print_term(Value),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     Toks.
 
+%% Pretty-printed `io_lib:format("~p", [Value])'
+pretty_print_term(Value) ->
+    Str = iolist_to_string(io_lib:format("~p.", [Value])),
+    {ok,Forms,_} = erl_scan:string(Str),
+    {ok,Exprs} = erl_parse:parse_exprs(Forms),
+    Result = erl_prettypr:format(hd(Exprs)),
+    iolist_to_string(Result).
 
+iolist_to_string(Io) ->
+    Bin = erlang:iolist_to_binary(Io),
+    erlang:binary_to_list(Bin).
 
 %% `ElemValue' is term, not form or tree.
 %% `ListTree' is list, in which value should be inserted.
