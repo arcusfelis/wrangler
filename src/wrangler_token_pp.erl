@@ -137,8 +137,8 @@ append_list_element(ListTree, Tree, ElemValue, FileFormat, TabWidth) ->
 
 append_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, []) ->
     append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth);
-append_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, [_|_]) ->
-    append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth).
+append_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, [_|_]=ListTreeElems) ->
+    append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, ListTreeElems).
 
 append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) ->
     %% Get range to erase
@@ -150,18 +150,37 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
     Toks1 = insert_tokens_before(MatchE, ElemValueToks, Toks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
 
-append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) ->
+append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, ListTreeElems) ->
+    LastElem = lists:last(ListTreeElems),
+    io:format("LastElem ~p~n", [LastElem]),
+    {LastS,_} = get_range(LastElem),
     %% Get range to erase
-    {_MatchS, {LineE,OffsetE} = MatchE} = get_range(ListTree),
-    ElemValueToks1 = [{',',{1,1}}, {whitespace,{1,1},' '}|ElemValueToks],
+    {_MatchS, MatchE} = get_range(ListTree),
     %% Get tokens
     Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
     Str = erlang:binary_to_list(Bin),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    ElemValueToks1 = [{',',{1,1}}]
+%           ++ get_delimitor_forms(FileFormat)
+            ++ get_whitespaces_between(token_loc(go_left_skipping_whitespaces(LastS, Toks)), LastS, Toks)
+            ++ ElemValueToks,
     AfterLoc = token_loc(go_left_skipping_whitespaces(MatchE, Toks)),
     Toks1 = insert_tokens_after(AfterLoc, ElemValueToks1, Toks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
-    
+
+get_whitespaces_between(MatchS, MatchE, Toks) ->
+    {BeforeToks, MatchToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
+    filter_whitespaces(MatchToks).
+
+filter_whitespaces(Toks) ->
+    [T||T={whitespace,_,_} <- Toks].
+
+get_delimitor_forms(dos) ->
+    [{whitespace,{1,1},'\r'}, {whitespace,{1,1},'\n'}];
+get_delimitor_forms(mac) ->
+    [{whitespace,{1,1},'\r'}];
+get_delimitor_forms(mac) ->
+    [{whitespace,{1,1},'\n'}].
 
 %% Goes from Loc left skipping all comments or whitespaces
 %% Stop and return token
