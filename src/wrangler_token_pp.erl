@@ -23,6 +23,7 @@ tokens_to_ast(Toks, TabWidth, FileFormat) ->
     %% Convert result tokens back to ast
     Bin = erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)),
     TmpFilename = tmp_filenate(),
+    io:format("~ts", [Bin]),
     ok = file:write_file(TmpFilename, Bin),
     {ok, {AnnAST1,_Info}} = try
             wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
@@ -104,6 +105,8 @@ insert_tokens_after(Loc, ElemValueToks, Toks) ->
 partition_by_location(Loc, Toks) ->
     partition_by_location(Loc, Toks, []).
 
+partition_by_location(Loc, [], Acc) ->
+    {lists:reverse(Acc), [], []};
 partition_by_location(Loc, [Tok|Toks], Acc) ->
     case token_loc(Tok) of
         Loc ->
@@ -153,20 +156,57 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
 append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, ListTreeElems) ->
     LastElem = lists:last(ListTreeElems),
     io:format("LastElem ~p~n", [LastElem]),
-    {LastS,_} = get_range(LastElem),
+    {LastS,LastE} = get_range(LastElem),
     %% Get range to erase
     {_MatchS, MatchE} = get_range(ListTree),
     %% Get tokens
     Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
     Str = erlang:binary_to_list(Bin),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    ElemValueToks1 = [{',',{1,1}}]
-%           ++ get_delimitor_forms(FileFormat)
-            ++ get_whitespaces_between(token_loc(go_left_skipping_whitespaces(LastS, Toks)), LastS, Toks)
+    %% If we have left comment, that we assume that this comment is for
+    %% the last argument of the list.
+    %% We don't care about multiline comments in the case
+    {CommentToks, Toks1} = cut_line_comment_and_leading_whitespaces(LastE, Toks),
+    IndentToks = indent_new_elem(LastS, Toks, TabWidth),
+    ElemValueToks1 = [{',', {1,1}}]
+            ++ CommentToks
+            ++ get_delimitor_forms(FileFormat)
+            ++ IndentToks
             ++ ElemValueToks,
-    AfterLoc = token_loc(go_left_skipping_whitespaces(MatchE, Toks)),
-    Toks1 = insert_tokens_after(AfterLoc, ElemValueToks1, Toks),
-    tokens_to_ast(Toks1, TabWidth, FileFormat).
+    Toks2 = insert_tokens_after(LastE, ElemValueToks1, Toks1),
+    tokens_to_ast(Toks2, TabWidth, FileFormat).
+
+
+indent_new_elem(LastS, Toks, TabWidth) ->
+    %% Tokens that separate last element from something before
+    %% [SomethingBefore,    Last]
+    %%                  ^^^^
+    LastSpaces = get_whitespaces_between(token_loc(go_left_skipping_comments_and_whitespaces(LastS, Toks)), LastS, Toks),
+    indent_new_elem(has_new_lines(LastSpaces), LastS, Toks, LastSpaces, TabWidth).
+
+%% One line version, we should build our own indention
+indent_new_elem(false, LastS, Toks, LastSpaces, TabWidth) ->
+    %% Take last element
+    %% Copy all tabs before last element
+    %% New element indention should contain Tabs plus whitespaces.
+    %% Both new and old element should has same offset.
+    {LastLine, LastOffset} = LastS,
+    %% How many whitespaces to have?
+    Indention = LastOffset - 1,
+    TabToks = same_line_tabs_before_loc(LastS, Toks),
+    TabOffset = length(TabToks) * TabWidth,
+    SpaceOffset = Indention - TabOffset,
+    TabToks ++ whitespaces(SpaceOffset);
+%% Multiline version, proper indention, use indention of the last element
+indent_new_elem(true, LastS, Toks, LastSpaces, TabWidth) ->
+    filter_last_list_toks(LastSpaces).
+    
+filter_last_list_toks([]) ->
+    [];
+filter_last_list_toks(Toks) ->
+    LastTok = lists:last(Toks),
+    {_, LastLineToks,_} = partition_by_location_line(token_loc(LastTok), Toks),
+    LastLineToks.
 
 get_whitespaces_between(MatchS, MatchE, Toks) ->
     {BeforeToks, MatchToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
@@ -184,10 +224,15 @@ get_delimitor_forms(mac) ->
 
 %% Goes from Loc left skipping all comments or whitespaces
 %% Stop and return token
-go_left_skipping_whitespaces(Loc, Toks) ->
+go_left_skipping_comments_and_whitespaces(Loc, Toks) ->
     {BeforeToks, _MatchToks, _AfterToks} = partition_by_location(Loc, Toks),
     BeforeToksR = lists:reverse(BeforeToks),
     hd(skip_comments_and_whitespaces(BeforeToksR)).
+
+go_left_skipping_whitespaces(Loc, Toks) ->
+    {BeforeToks, _MatchToks, _AfterToks} = partition_by_location(Loc, Toks),
+    BeforeToksR = lists:reverse(BeforeToks),
+    hd(skip_whitespaces(BeforeToksR)).
 
 skip_comments_and_whitespaces([]) ->
     [];
@@ -204,6 +249,35 @@ is_comment_or_whitespace({whitespace,_,_}) ->
 is_comment_or_whitespace(_) ->
     false.
 
+is_new_line({whitespace,_,'\n'}) ->
+    true;
+is_new_line({whitespace,_,'\r'}) ->
+    true;
+is_new_line(_) ->
+    false.
+
+skip_whitespaces([]) ->
+    [];
+skip_whitespaces([T|Toks]) ->
+    case is_whitespace(T) of
+        true -> skip_whitespaces(Toks);
+        false -> [T|Toks]
+    end.
+
+is_whitespace({whitespace,_,_}) ->
+    true;
+is_whitespace(_) ->
+    false.
+
+
+%% shift_tokens_left_after/3 that stops ones new line is reached
+shift_tokens_loc_left_singleline(Loc, ShiftChars, Toks) ->
+    {BeforeToks, MatchToks, AfterToks} = partition_by_location_line(Loc, Toks),
+    BeforeToks ++ shift_tokens_left_after(Loc, ShiftChars, MatchToks) ++ AfterToks.
+
+shift_tokens_left_after(Loc, ShiftChars, Toks) ->
+    {BeforeToks, MatchToks, AfterToks} = partition_by_location(Loc, Toks),
+    BeforeToks ++ MatchToks ++ shift_tokens_left(ShiftChars, AfterToks).
 
 shift_tokens_left(ShiftChars, Toks) ->
     [set_token_loc(T, shift_token_loc_left(ShiftChars, token_loc(T))) || T <- Toks].
@@ -217,3 +291,56 @@ shift_token_loc_left(ShiftChars, {Line, Offset}) ->
 shift_token_loc_down(ShiftLines, {Line, Offset}) ->
     {Line+ShiftLines, Offset}.
 
+partition_by_location_line({Line,_Offset}, Toks) ->
+    MatchS = {Line, 0},
+    MatchE = {Line+1, 0},
+    partition_by_range(MatchS, MatchE, Toks).
+
+%% cut_leading_whitespaces + cut_line_comment
+cut_line_comment_and_leading_whitespaces(LineLoc, Toks) ->
+    {CommentToks, OtherToks} = cut_line_comment(LineLoc, Toks),
+    case CommentToks of
+        [] ->
+            {[], Toks};
+        [CommentH|_] ->
+            {WsToks, OtherToks1} = cut_leading_whitespaces(token_loc(CommentH), OtherToks),
+            {WsToks ++ CommentToks, OtherToks1}
+    end.
+
+%% Cuts "Start      Loc"
+%%            ^^^^^^
+cut_leading_whitespaces(Lok, Toks) ->
+    Start = shift_token_loc_left(1, token_loc(go_left_skipping_comments_and_whitespaces(Lok, Toks))),
+    {BeforeToks, MatchedToks, AfterToks} = partition_by_range(Start, Lok, Toks),
+    {MatchedToks, BeforeToks ++ AfterToks}.
+
+%% ListLoc is Line or Loc
+cut_line_comment(LineLoc, Toks) ->
+    CommentToks = match_line_comment(LineLoc, Toks),
+    OtherToks = Toks -- CommentToks,
+    {CommentToks, OtherToks}.
+    
+match_line_comment({Line,_}, Toks) ->
+    match_line_comment(Line, Toks);
+match_line_comment(Line, Toks) ->
+    [T||T={comment, {L,_}, _} <- Toks, Line =:= L].
+
+match_line_tabs({Line,_}, Toks) ->
+    match_line_tabs(Line, Toks);
+match_line_tabs(Line, Toks) ->
+    [T||T={whitespace, {L,_}, '\t'} <- Toks, Line =:= L].
+
+
+has_new_lines(Toks) ->
+    lists:any(fun is_new_line/1, Toks).
+
+%% Get tabs before Loc on the Loc's line
+same_line_tabs_before_loc(Loc, Toks) ->
+    %% All tabs on the line
+    LineTabs = match_line_tabs(Loc, Toks),
+    %% Tabs before
+    {BeforeToks, _MatchToks, _AfterToks} = partition_by_location(Loc, LineTabs),
+    BeforeToks.
+
+whitespaces(Len) ->
+    lists:duplicate(Len, {whitespace, {1,1}, ' '}).
