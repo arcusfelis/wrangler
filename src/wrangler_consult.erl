@@ -13,10 +13,11 @@ consult(Filename) ->
     Str2 = erlang:iolist_to_binary("consult()->" ++ wrangler_misc:concat_toks(Exprs)),
     TmpFilename = tmp_filenate(),
     ok = file:write_file(TmpFilename, Str2),
-    FileFormat = wrangler_misc:file_format(TmpFilename),
-    {ok, {AnnAST,_Info}} = wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
-%   AnnTrees = unlift_fun(AnnAST),
-%   {ok, AnnTrees}.
+    {ok, {AnnAST,_Info}} = try
+            wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
+        after
+            ok = file:delete(TmpFilename)
+        end,
     {ok, AnnAST}.
 
 unlift_funs_from_ast(AnnAST) ->
@@ -34,7 +35,7 @@ rewrite_expression(E) ->
 write_file(FilenameOrig, AnnAST) ->
     FileNameOut = FilenameOrig ++ ".new",
     write_file(FilenameOrig, FileNameOut, AnnAST).
-    
+
 write_file(FilenameOrig, FileNameOut, AnnAST) ->
     TabWidth = 4,
     FileFormat = wrangler_misc:file_format(FilenameOrig),
@@ -91,9 +92,10 @@ replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
     ClauseAST = hd(wrangler_syntax:function_clauses(FunAST)),
     ExprASTs = wrangler_syntax:clause_body(ClauseAST),
     EndLocs = [get_range_end(ExprAST) || ExprAST <- ExprASTs],
-    ExpectedCommasLocs = shift_right_locs(EndLocs),
+    AllCommaLocs = comma_locs(Toks),
+    ExpectedCommasLocs = expected_comma_logs(list_init(EndLocs), AllCommaLocs),
 
-    io:format("~nComLocs ~10000p ~nEndLocs ~10000p ~n", [comma_locs(Toks), EndLocs]),
+%   io:format("~nComLocs ~10000p ~nEndLocs ~10000p ~n", [AllCommaLocs, EndLocs]),
 
     Toks2 = replace_commas(Toks, ExpectedCommasLocs),
     erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks2)).
@@ -111,12 +113,6 @@ replace_commas([Tok|Toks], MatchLocs) ->
 replace_commas([], _MatchLocs) ->
     [].
 
-shift_right_locs(Locs) ->
-    lists:map(fun shift_right_loc/1, Locs).
-
-shift_right_loc({Vert,Horiz}) ->
-    {Vert,Horiz+1}.
-
 comma_locs([{',',CommaLoc}|Toks]) ->
     [CommaLoc|comma_locs(Toks)];
 comma_locs([_|Toks]) ->
@@ -132,3 +128,19 @@ get_range(Node) ->
 get_range_end(Node) ->
     {_S, E} = get_range(Node),
     E.
+
+%% Expected comma is the first comma after end of a term
+%% Config examples:
+%% {term}.
+%% or
+%% {term}      .
+expected_comma_logs([E|_]=EndLocs, [A|AllCommaLocs]) when A < E ->
+    expected_comma_logs(EndLocs, AllCommaLocs);
+expected_comma_logs([_|EndLocs], [A|AllCommaLocs]) ->
+    [A|expected_comma_logs(EndLocs, AllCommaLocs)];
+expected_comma_logs([], _) ->
+    [].
+
+list_init(List) ->
+    [_|R] = lists:reverse(List),
+    lists:reverse(R).
