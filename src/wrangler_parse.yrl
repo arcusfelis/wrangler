@@ -577,10 +577,6 @@ Erlang code.
 %% These really suck and are only here until Calle gets multiple
 %% entry points working.
 
--spec parse_form(Tokens) -> {ok, AbsForm} | {error, ErrorInfo} when
-      Tokens :: [token()],
-      AbsForm :: abstract_form(),
-      ErrorInfo :: error_info().
 parse_form([{'-',L1},{atom,L2,spec}|Tokens]) ->
     parse([{'-',L1},{'spec',L2}|Tokens]);
 parse_form([{'-',L1},{atom,L2,callback}|Tokens]) ->
@@ -588,10 +584,6 @@ parse_form([{'-',L1},{atom,L2,callback}|Tokens]) ->
 parse_form(Tokens) ->
     parse(Tokens).
 
--spec parse_exprs(Tokens) -> {ok, ExprList} | {error, ErrorInfo} when
-      Tokens :: [token()],
-      ExprList :: [abstract_expr()],
-      ErrorInfo :: error_info().
 parse_exprs(Tokens) ->
     case parse([{atom,0,f},{'(',0},{')',0},{'->',0}|Tokens]) of
 	{ok,{function,_Lf,f,0,[{clause,_Lc,[],[],Exprs}]}} ->
@@ -599,10 +591,6 @@ parse_exprs(Tokens) ->
 	{error,_} = Err -> Err
     end.
 
--spec parse_term(Tokens) -> {ok, Term} | {error, ErrorInfo} when
-      Tokens :: [token()],
-      Term :: term(),
-      ErrorInfo :: error_info().
 parse_term(Tokens) ->
     case parse([{atom,0,f},{'(',0},{')',0},{'->',0}|Tokens]) of
 	{ok,{function,_Lf,f,0,[{clause,_Lc,[],[],[Expr]}]}} ->
@@ -763,7 +751,6 @@ attribute_farity(Other) -> Other.
 attribute_farity_list(Args) ->
     [attribute_farity(A) || A <- Args].
 
--spec error_bad_decl(integer(), attributes()) -> no_return().
 
 error_bad_decl(L, S) ->
     ret_err(L, io_lib:format("bad ~w declaration", [S])).
@@ -881,7 +868,6 @@ check_clauses(Cs, Name, Arity) ->
 build_try(L,Es,Scs,{Ccs,As}) ->
     {'try',L,Es,Scs,Ccs,As}.
 
--spec ret_err(_, _) -> no_return().
 ret_err(L, S) ->
     {location,Location} = get_attribute(L, location),
     return_error(Location, S).
@@ -900,9 +886,6 @@ mapl(_, []) ->
 
 %%  Convert between the abstract form of a term and a term.
 
--spec normalise(AbsTerm) -> Data when
-      AbsTerm :: abstract_expr(),
-      Data :: term().
 normalise({char,_,C}) -> C;
 normalise({integer,_,I}) -> I;
 normalise({float,_,F}) -> F;
@@ -944,21 +927,10 @@ normalise_list([]) ->
 default_encoding() ->
     utf8.
 
--spec abstract(Data) -> AbsTerm when
-      Data :: term(),
-      AbsTerm :: abstract_expr().
 abstract(T) ->
     abstract(T, 0, default_encoding()).
 
 %%% abstract/2 takes line and encoding options
--spec abstract(Data, Options) -> AbsTerm when
-      Data :: term(),
-      Options :: Line | [Option],
-      Option :: {line, Line} | {encoding, Encoding},
-      Encoding :: latin1 | unicode | utf8,
-      Line :: erl_scan:line(),
-      AbsTerm :: abstract_expr().
-
 abstract(T, Line) when is_integer(Line) ->
     abstract(T, Line, default_encoding());
 abstract(T, {Line, Col}) when is_integer(Line)andalso is_integer(Col) ->  %% clause added by HL.
@@ -1024,16 +996,9 @@ abstract_byte(Bits, L) ->
 
 %%  Generate a list of tokens representing the abstract term.
 
--spec tokens(AbsTerm) -> Tokens when
-      AbsTerm :: abstract_expr(),
-      Tokens :: [token()].
 tokens(Abs) ->
     tokens(Abs, []).
 
--spec tokens(AbsTerm, MoreTokens) -> Tokens when
-      AbsTerm :: abstract_expr(),
-      MoreTokens :: [token()],
-      Tokens :: [token()].
 tokens({char,L,C}, More) -> [{char,L,C}|More];
 tokens({integer,L,N}, More) -> [{integer,L,N}|More];
 tokens({float,L,F}, More) -> [{float,L,F}|More];
@@ -1097,7 +1062,6 @@ inop_prec('.') -> {900,900,1000}.
 
 -type pre_op() :: 'catch' | '+' | '-' | 'bnot' | 'not' | '#'.
 
--spec preop_prec(pre_op()) -> {0 | 600 | 700, 100 | 700 | 800}.
 
 preop_prec('catch') -> {0,100};
 preop_prec('+') -> {600,700};
@@ -1106,11 +1070,9 @@ preop_prec('bnot') -> {600,700};
 preop_prec('not') -> {600,700};
 preop_prec('#') -> {700,800}.
 
--spec func_prec() -> {800,700}.
 
 func_prec() -> {800,700}.
 
--spec max_prec() -> 900.
 
 max_prec() -> 900.
 

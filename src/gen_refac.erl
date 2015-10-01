@@ -137,16 +137,6 @@
 -include("../include/wrangler.hrl").
 
 
--callback input_par_prompts() -> [string()].
--callback select_focus(Args::#args{}) ->{ok, term()}|{error, term()}.
--callback check_pre_cond(Args::#args{}) -> ok |{error, term()}.
--callback selective() -> true | false.
--callback transform(Args::#args{}) ->
-     {ok, [{{filename(),filename()},syntaxTree()}]} | {error, term()}.
-    
-     
--spec(select_focus(Module::module(), Args::args()) ->
-             {ok, term()} | {error, term()}).
 select_focus(Module, Args) ->
     case apply(Module, select_focus, [Args]) of 
         {ok, Term} ->
@@ -158,8 +148,6 @@ select_focus(Module, Args) ->
              "is different from the return type expected."}
     end.
 
--spec(check_pre_cond(Module::module()|tuple(), Args::#args{}) ->
-             ok | {error, term()}).
 check_pre_cond(Module, Args) ->
     case apply(Module,check_pre_cond, [Args]) of 
         ok ->
@@ -171,7 +159,6 @@ check_pre_cond(Module, Args) ->
              "is different from the return type expected."} 
     end.
 
--spec(selective(Module::module()) ->boolean()|{error, term()}).
 selective(Module) ->
     case Module:selective() of 
         true ->
@@ -184,10 +171,6 @@ selective(Module) ->
     end.
    
 
-%%@private
--spec(apply_changes(Module::module(), Args::[term()], CandsNotToChange::[term()]) ->
-             {ok, [{filename(), filename(), syntaxTree()}]} |
-             {error, term()}).
 apply_changes(Module, Args, CandsNotToChange) ->
     wrangler_gen_refac_server:set_flag({self(), {false, CandsNotToChange}}),
     case apply(Module, transform, [Args]) of
@@ -200,11 +183,6 @@ apply_changes(Module, Args, CandsNotToChange) ->
             {error, Reason}
     end.
 
-%%@doc The interface function for invoking a refactoring defined 
-%% in module `ModName'.
--spec(run_refac(Module::module()|string()|tuple(), Args::[term()])->
-             {ok, string()} | {change_set, [{string(), string()}], module(), #args{}}|
-             {error, term()}).
 run_refac(ModName, Args) ->
     run_refac(ModName, Args, emacs).
 
@@ -212,10 +190,6 @@ run_refac(ModName, Args) ->
 %%@doc The interface function for invoking a refactoring defined 
 %% in module `ModName'.
 %%@private
--spec(run_refac(Module::module()|string()|tuple(), Args::[term()], Editor::atom())->
-             {ok, string()} | {ok, [{filename(), filename(), string()}]} | 
-			 {change_set, [{string(), string()}], module(), #args{}}|
-             {error, term()}).
 run_refac(ModName, Args=[CurFileName, [Line,Col],
                          [[StartLine, StartCol],
                           [EndLn, EndCol]], UserInputs,

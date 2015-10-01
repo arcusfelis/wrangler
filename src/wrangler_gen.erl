@@ -916,7 +916,7 @@ gen_file_names(ModOrFile, Lazy, SearchPaths) ->
         _ when is_atom(ModOrFile) ->
             Fs=[F||F<-Files, filename:basename(F,".erl")==atom_to_list(ModOrFile)],
             case Fs of 
-                [] -> error("None of the files specified in the "
+                [] -> erlang:error("None of the files specified in the "
                             "searchpaths matches the module name given.");
                 [F|_] -> [F]
             end;

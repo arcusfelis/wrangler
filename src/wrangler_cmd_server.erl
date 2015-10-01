@@ -213,10 +213,10 @@ non_atomic_refac_loop(Parent, State=#state{cmds={non_atomic, CRs},
                 normal ->
                     non_atomic_refac_loop(Parent, State);
                 _ ->
-                    error(Reason)
+                    erlang:error(Reason)
             end;
         Msg ->
-            error(format_msg("Unexpected message in non_atomic_refac_loop:~p\n", Msg))    
+            erlang:error(format_msg("Unexpected message in non_atomic_refac_loop:~p\n", Msg))    
     end.
  
 atomic_refac_loop(Parent, State=#state{cmds={atomic, CRs}, 
@@ -247,10 +247,10 @@ atomic_refac_loop(Parent, State=#state{cmds={atomic, CRs},
                 normal ->
                     atomic_refac_loop(Parent, State);
                 _ ->
-                    error(Reason)
+                    erlang:error(Reason)
             end;
         Msg->
-            error(format_msg("Unexpected message in atomic_refac_loop:~p\n", Msg))    
+            erlang:error(format_msg("Unexpected message in atomic_refac_loop:~p\n", Msg))    
     end.
 
 elementary_refac_loop(Parent, State=#state{cmds={refactoring, RefacName, Args},
@@ -281,7 +281,7 @@ elementary_refac_loop(Parent, State=#state{cmds={refactoring, RefacName, Args},
                     From ! {self(), {ok, {refactoring, RefacName, Args}}, Parent}
             end;
         Msg -> 
-            error(format_msg("Unexpected message in elementary_refac_loop: ~p.\n", Msg))
+            erlang:error(format_msg("Unexpected message in elementary_refac_loop: ~p.\n", Msg))
     end.
 
 interactive_refac_loop(Parent, State=#state{cmds={interactive, non_atomic, ERs}}) ->
@@ -341,10 +341,10 @@ while_refac_loop(Parent, State=#state{cmds={while, Cond, Qual, CmdGen},
                 normal ->
                     while_refac_loop(Parent, State);
                 _ ->
-                    error(Reason)
+                    erlang:error(Reason)
             end;
         Msg ->
-            error(format_msg("Unexpected message in while_refac_loop:~p\n", Msg))    
+            erlang:error(format_msg("Unexpected message in while_refac_loop:~p\n", Msg))    
     end.
 
 if_then_refac_loop(Parent, State=#state{cmds={if_then, Cond, CR},
@@ -375,10 +375,10 @@ if_then_refac_loop(Parent, State=#state{cmds={if_then, Cond, CR},
                 normal ->
                     if_then_refac_loop(Parent, State);
                 _ ->
-                    error(Reason)
+                    erlang:error(Reason)
             end;
         Msg ->
-            error(format_msg("Unexpected message in if_then_refac_loop:~p\n", Msg))  
+            erlang:error(format_msg("Unexpected message in if_then_refac_loop:~p\n", Msg))  
     end.
 
        
@@ -433,10 +433,10 @@ generate_a_cmd(Cmd={refac_,RefacName, Args0})->
                     Cmds
             catch
                 _E1:_E2 ->
-                    error(format_msg("Illegal command generator:\n~p\n", {_E1,_E2,Cmd}))  
+                    erlang:error(format_msg("Illegal command generator:\n~p\n", {_E1,_E2,Cmd}))  
             end;
         false ->
-            error(format_msg("Illegal command generator:\n~p\n", Cmd))  
+            erlang:error(format_msg("Illegal command generator:\n~p\n", Cmd))  
     end; 
 generate_a_cmd(Cmd={interactive, _, _}) ->
     Cmd;
@@ -453,7 +453,7 @@ generate_a_cmd(Cmd={non_atomic, _}) ->
 generate_a_cmd(Cmd={atomic, _}) ->
     Cmd;
 generate_a_cmd(Cmd) ->
-    error(format_msg("Illegal command generator:\n~p\n", Cmd)).
+    erlang:error(format_msg("Illegal command generator:\n~p\n", Cmd)).
 
 update_state(State=#state{changed_files=Changes}, PrevResult) ->
     State#state{changed_files= update_modified_files(PrevResult,Changes)}.
@@ -477,7 +477,7 @@ make_loop_name(CR) ->
         {non_atomic, _CR} ->
             non_atomic_refac_loop;
         _ ->
-            error(format_msg("Illegal composite refactoring command:\n~p\n", CR))   
+            erlang:error(format_msg("Illegal composite refactoring command:\n~p\n", CR))   
     end.
 
 

@@ -265,10 +265,6 @@
 -compile(export_all).
 
 -include("../include/wrangler.hrl").
-
--callback composite_refac(Args::#args{}) -> composite_refac()|[].
--callback input_par_prompts()->[string()].
--callback select_focus(Args::#args{}) -> {ok, term()}|{error, term()}.   
        
 %%@private
 input_par_prompts(CallBackMod) ->
@@ -282,8 +278,6 @@ input_pars_1(CallBackMod) when is_list(CallBackMod)->
 input_pars_1(_) ->
     throw:error(badarg).
 
--spec(select_focus(Module::module(), Args::args()) ->
-             {ok, term()} | {error, term()}).
 select_focus(Module, Args) ->
     case apply(Module, select_focus, [Args]) of 
         {ok, Term} ->
