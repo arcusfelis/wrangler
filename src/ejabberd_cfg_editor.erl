@@ -1,12 +1,92 @@
 -module(ejabberd_cfg_editor).
--export([delete_module/4,
-         set_option/6]).
+-export([run_commands/4,
+         add_module/4,
+         add_module_after/5,
+         delete_module/4,
+         set_option/6,
+         unset_option/5]).
+
+run_commands(Commands, Tree, FileFormat, TabWidth) ->
+    run_commands(Commands, Tree, FileFormat, TabWidth, []).
+
+
+run_commands([Command|Commands], Tree, FileFormat, TabWidth, Results) ->
+    {ok, Tree2, Res} = run_command(Command, Tree, FileFormat, TabWidth),
+    run_commands(Commands, Tree2, FileFormat, TabWidth, [Res|Results]);
+run_commands([], Tree, _FileFormat, _TabWidth, Results) ->
+    {ok, Tree, Results}.
+
+run_command({add_module, Module}, Tree, FileFormat, TabWidth) ->
+    add_module(Module, Tree, FileFormat, TabWidth);
+run_command({add_module_after, Module, AfterModule}, Tree, FileFormat, TabWidth) ->
+    add_module_after(Module, AfterModule, Tree, FileFormat, TabWidth);
+run_command({delete_module, Module}, Tree, FileFormat, TabWidth) ->
+    delete_module(Module, Tree, FileFormat, TabWidth);
+run_command({set_option, Module, OptKey, OptValue}, Tree, FileFormat, TabWidth) ->
+    set_option(Module, OptKey, OptValue, Tree, FileFormat, TabWidth);
+run_command({unset_option, Module, OptKey}, Tree, FileFormat, TabWidth) ->
+    unset_option(Module, OptKey, Tree, FileFormat, TabWidth).
+
+
+add_module_after(Module, AfterModule, Tree, FileFormat, TabWidth)
+    when is_atom(Module), is_atom(AfterModule), is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    MatchModF = fun(T,{M,_}, [{AllModules,_},{{modules,AllModules},_}], A)
+                        when M =:= Module -> [T|A];
+                   (_,_,_, A) -> A end,
+    MatchAfterModF = fun(T,{M,_}, [{AllModules,_},{{modules,AllModules},_}], A)
+                        when M =:= AfterModule -> [T|A];
+                   (_,_,_, A) -> A end,
+    Acc = api_ast_traverse2:fold_values_with_path_values(MatchModF, [], Tree1),
+    AfterAcc = api_ast_traverse2:fold_values_with_path_values(MatchAfterModF, [], Tree1),
+    add_module_after_2(Module, Tree, FileFormat, TabWidth, Acc, AfterAcc).
+
+add_module_after_2(Module, Tree, FileFormat, TabWidth, [], []) ->
+    %% Not found, insert at the end
+    add_module(Module, Tree, FileFormat, TabWidth);
+add_module_after_2(Module, Tree, FileFormat, TabWidth, [], [AfterModTree]) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    NewElem = {Module, []},
+    %% We assume that modules key exists in the file
+    MatchModsF = fun(T, Mods, [{{modules,_}, _}], A) when is_list(Mods) -> [T|A];
+                   (_,_,_, A) -> A end,
+    [ModsTree] = api_ast_traverse2:fold_values_with_path_values(MatchModsF, [], Tree1),
+    NewTree = wrangler_token_pp:insert_another_list_element_after(ModsTree, Tree, NewElem, AfterModTree, FileFormat, TabWidth),
+    {ok, NewTree, module_added_after};
+add_module_after_2(Module, Tree, FileFormat, TabWidth, [ModTree], _) ->
+    {ok, Tree, module_already_defined}.
+
+
+
+
+%% Add module if not yet added
+%% Do nothing if it exists
+add_module(Module, Tree, FileFormat, TabWidth)
+    when is_atom(Module), is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    MatchModF = fun(T,{M,_}, [{AllModules,_},{{modules,AllModules},_}], A)
+                        when M =:= Module -> [T|A];
+                   (_,_,_, A) -> A end,
+    Acc = api_ast_traverse2:fold_values_with_path_values(MatchModF, [], Tree1),
+    add_module_2(Module, Tree, FileFormat, TabWidth, Acc).
+
+add_module_2(Module, Tree, FileFormat, TabWidth, []) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    NewElem = {Module, []},
+    %% We assume that modules key exists in the file
+    MatchModsF = fun(T, Mods, [{{modules,_}, _}], A) when is_list(Mods) -> [T|A];
+                   (_,_,_, A) -> A end,
+    [ModsTree] = api_ast_traverse2:fold_values_with_path_values(MatchModsF, [], Tree1),
+    NewTree = wrangler_token_pp:append_list_element(ModsTree, Tree, NewElem, FileFormat, TabWidth),
+    {ok, NewTree, module_added};
+add_module_2(Module, Tree, FileFormat, TabWidth, [ModTree]) ->
+    {ok, Tree, module_already_defined}.
 
 %% Delete module
 delete_module(Module, Tree, FileFormat, TabWidth)
     when is_atom(Module), is_integer(TabWidth), is_atom(FileFormat) ->
     Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
-    MatchModF = fun(T,{M,_}, [{AllModules,_},{{modules,AllModules},_}|_], A)
+    MatchModF = fun(T,{M,_}, [{AllModules,_},{{modules,AllModules},_}], A)
                         when M =:= Module -> [T|A];
                    (_,_,_, A) -> A end,
     Acc = api_ast_traverse2:fold_values_with_path_values(MatchModF, [], Tree1),
@@ -17,6 +97,24 @@ delete_module_2(Module, Tree, FileFormat, TabWidth, []) ->
 delete_module_2(Module, Tree, FileFormat, TabWidth, [ModTree]) ->
     NewTree = wrangler_token_pp:erase_matched(ModTree, Tree, FileFormat, TabWidth),
     {ok, NewTree, module_deleted}.
+
+
+unset_option(Module, OptKey, Tree, FileFormat, TabWidth)
+    when is_atom(Module), is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    %% Find Options list
+    MatchOptF = fun(T,{K,_},[{Opts,_},{{M,_},_},{AllModules,_},{{modules,AllModules},_}], A)
+                        when M =:= Module, is_list(Opts), K =:= OptKey -> [T|A];
+                    (_,_,_, A) -> A end,
+    Acc = api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree1),
+    unset_option_2(Module, OptKey, Tree, FileFormat, TabWidth, Acc).
+
+unset_option_2(_Module, _OptKey, Tree, _FileFormat, _TabWidth, []) ->
+    {ok, Tree, option_is_missing};
+unset_option_2(_Module, _OptKey, Tree, FileFormat, TabWidth, [OptTree]) ->
+    NewTree = wrangler_token_pp:erase_matched(OptTree, Tree, FileFormat, TabWidth),
+    {ok, NewTree, option_deleted}.
+    
 
 %% Add or replace option
 %% Do nothing if module does not exists
@@ -29,7 +127,7 @@ set_option(Module, OptKey, OptValue, Tree, FileFormat, TabWidth)
     when is_atom(Module), is_integer(TabWidth), is_atom(FileFormat) ->
     Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
     %% Find Options list
-    MatchOptsF = fun(T,X,[{{M,_},_},{AllModules,_},{{modules,AllModules},_}|_], A)
+    MatchOptsF = fun(T,X,[{{M,_},_},{AllModules,_},{{modules,AllModules},_}], A)
                         when M =:= Module, is_list(X) -> [T|A];
                     (_,_,_, A) -> A end,
     Acc = api_ast_traverse2:fold_values_with_path_values(MatchOptsF, [], Tree1),

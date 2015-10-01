@@ -1,7 +1,8 @@
 -module(wrangler_token_pp).
 -export([erase_matched/4,
          replace_matched/5,
-         append_list_element/5]).
+         append_list_element/5,
+         insert_another_list_element_after/6]).
 
 %% Search for `MatchAST' in `AnnAST' to delete it.
 %% FileFormat = wrangler_misc:file_format(Filename)
@@ -52,10 +53,27 @@ replace_matched_tokens(MatchAST, AnnAST, NewValueToks, FileFormat, TabWidth) ->
 
 %% MatchAST = a, AnnAST = [a,b,c], Type = list_prefix, BeforeToks = "[", AfterToks = ",b,c]"
 fix_and_join_toks(list_prefix, BeforeToks, AfterToks) ->
-    BeforeToks ++ remove_first_list_separator(AfterToks).
+    %% Try to delete next separator
+    case remove_first_list_separator(AfterToks) of
+        AfterToks ->
+            %% Delete previos separator
+            BeforeToks1 = remove_first_list_separator_r(BeforeToks),
+            BeforeToks1 ++ AfterToks;
+        AfterToks1 ->
+            BeforeToks ++ AfterToks1
+    end.
 
-remove_first_list_separator([{']',_}|Toks]) ->
-    Toks;
+%% Go backward
+remove_first_list_separator_r(Toks) ->
+    ToksR = lists:reverse(Toks),
+    ToksR1 = remove_first_list_separator(ToksR),
+    lists:reverse(ToksR1).
+    
+%% Go forward
+remove_first_list_separator([{']',_}|_]=Toks) ->
+    Toks; %% no more list separators, stop
+remove_first_list_separator([{'[',_}|_]=Toks) ->
+    Toks; %% no more list separators, stop
 remove_first_list_separator([{',',_}|Toks]) ->
     Toks;
 remove_first_list_separator([Tok|Toks]) ->
@@ -146,6 +164,11 @@ append_list_element(ListTree, Tree, ElemValue, FileFormat, TabWidth) ->
     ListTreeElems = wrangler_syntax:list_elements(ListTree),
     append_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, ListTreeElems).
 
+insert_another_list_element_after(ListTree, Tree, ElemValue, PrevElem, FileFormat, TabWidth) ->
+    ElemValueToks = term_to_tokens(ElemValue, TabWidth, FileFormat),
+    ListTreeElems = wrangler_syntax:list_elements(ListTree),
+    add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileFormat, TabWidth, ListTreeElems).
+
 append_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, []) ->
     append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth);
 append_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, [_|_]=ListTreeElems) ->
@@ -164,9 +187,10 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
 append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, ListTreeElems) ->
     LastElem = lists:last(ListTreeElems),
     io:format("LastElem ~p~n", [LastElem]),
-    {LastS,LastE} = get_range(LastElem),
-    %% Get range to erase
-    {_MatchS, MatchE} = get_range(ListTree),
+    add_another_list_element_after(ListTree, Tree, ElemValueToks, LastElem, FileFormat, TabWidth, ListTreeElems).
+
+add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileFormat, TabWidth, ListTreeElems) ->
+    {PrevS,PrevE} = get_range(PrevElem),
     %% Get tokens
     Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
     Str = erlang:binary_to_list(Bin),
@@ -174,14 +198,14 @@ append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth,
     %% If we have left comment, that we assume that this comment is for
     %% the last argument of the list.
     %% We don't care about multiline comments in the case
-    {CommentToks, Toks1} = cut_line_comment_and_leading_whitespaces(LastE, Toks),
-    IndentToks = indent_new_elem(LastS, Toks, TabWidth),
+    {CommentToks, Toks1} = cut_line_comment_and_leading_whitespaces(PrevE, Toks),
+    IndentToks = indent_new_elem(PrevS, Toks, TabWidth),
     ElemValueToks1 = [{',', {1,1}}]
             ++ CommentToks
             ++ get_delimitor_forms(FileFormat)
             ++ IndentToks
             ++ ElemValueToks,
-    Toks2 = insert_tokens_after(LastE, ElemValueToks1, Toks1),
+    Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
     tokens_to_ast(Toks2, TabWidth, FileFormat).
 
 
