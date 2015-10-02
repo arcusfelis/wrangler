@@ -72,3 +72,7 @@ Wrangler online documentation is available from http://refactoringtools.github.c
      need to highlight an expression, or enter a new name. More details are 
      available from the documenation.
 	 
+
+-------------------------------- Rebar compilation ------------------------
+
+Minimal rebar version is 2.6.1 (should have fix https://github.com/rebar/rebar/pull/445)
