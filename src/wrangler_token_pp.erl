@@ -24,7 +24,6 @@ tokens_to_ast(Toks, TabWidth, FileFormat) ->
     %% Convert result tokens back to ast
     Bin = erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)),
     TmpFilename = tmp_filenate(),
-    io:format("~ts", [Bin]),
     ok = file:write_file(TmpFilename, Bin),
     {ok, {AnnAST1,_Info}} = try
             wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
@@ -186,7 +185,6 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
 
 append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth, ListTreeElems) ->
     LastElem = lists:last(ListTreeElems),
-    io:format("LastElem ~p~n", [LastElem]),
     add_another_list_element_after(ListTree, Tree, ElemValueToks, LastElem, FileFormat, TabWidth, ListTreeElems).
 
 add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileFormat, TabWidth, ListTreeElems) ->
