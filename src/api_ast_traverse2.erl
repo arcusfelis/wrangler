@@ -181,4 +181,4 @@ tree_to_string(WranglerAST) ->
 string_eval(S, Envs) ->
     {ok,Forms,_} = erl_scan:string(S),
     {ok,Exprs} = erl_parse:parse_exprs(Forms),
-    erl_eval:exprs(Exprs, Envs).
+    eall_node_pathsrl_eval:exprs(Exprs, Envs).

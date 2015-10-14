@@ -1,7 +1,11 @@
 -module(wrangler_consult).
 -export([consult/1,
+         consult_terms/1,
+         consult_string/1,
          write_file/2,
          write_file/3]).
+
+-export([terms_to_tokens/2]).
 
 consult(Filename) ->
     FileFormat = wrangler_misc:file_format(Filename),
@@ -19,6 +23,31 @@ consult(Filename) ->
             ok = file:delete(TmpFilename)
         end,
     {ok, AnnAST}.
+
+%% @doc Convert terms to AST
+consult_terms(Terms) ->
+    String = terms_to_string(Terms),
+    consult_string(String).
+
+%% @doc Convert string to AST
+consult_string(String) ->
+    TmpFilename = tmp_filenate(),
+    ok = file:write_file(TmpFilename, String),
+    try
+        consult(TmpFilename)
+    after
+        ok = file:delete(TmpFilename)
+    end.
+
+terms_to_tokens(Terms, FileFormat) ->
+    TabWidth = 4,
+    Str = erlang:binary_to_list(erlang:iolist_to_binary(terms_to_string(Terms))),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    {ok, Toks}.
+
+terms_to_string(Terms) ->
+    [io_lib:format("~p.~n", [X]) || X <- Terms].
+
 
 unlift_funs_from_ast(AnnAST) ->
     Elems = wrangler_syntax:form_list_elements(AnnAST),

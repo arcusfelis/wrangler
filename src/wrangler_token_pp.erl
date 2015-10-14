@@ -4,6 +4,8 @@
          append_list_element/5,
          insert_another_list_element_after/6]).
 
+-export([get_delimiter_forms/1]).
+
 %% Search for `MatchAST' in `AnnAST' to delete it.
 %% FileFormat = wrangler_misc:file_format(Filename)
 %% FileFormat = dos.
@@ -200,7 +202,7 @@ add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileForm
     IndentToks = indent_new_elem(PrevS, Toks, TabWidth),
     ElemValueToks1 = [{',', {1,1}}]
             ++ CommentToks
-            ++ get_delimitor_forms(FileFormat)
+            ++ get_delimiter_forms(FileFormat)
             ++ IndentToks
             ++ ElemValueToks,
     Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
@@ -245,11 +247,11 @@ get_whitespaces_between(MatchS, MatchE, Toks) ->
 filter_whitespaces(Toks) ->
     [T||T={whitespace,_,_} <- Toks].
 
-get_delimitor_forms(dos) ->
+get_delimiter_forms(dos) ->
     [{whitespace,{1,1},'\r'}, {whitespace,{1,1},'\n'}];
-get_delimitor_forms(mac) ->
+get_delimiter_forms(mac) ->
     [{whitespace,{1,1},'\r'}];
-get_delimitor_forms(mac) ->
+get_delimiter_forms(unix) ->
     [{whitespace,{1,1},'\n'}].
 
 %% Goes from Loc left skipping all comments or whitespaces
