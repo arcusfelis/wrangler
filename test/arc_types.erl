@@ -15,13 +15,13 @@
 sublist(ListOfTypes) ->
     Len = length(ListOfTypes),
     Random = shuffle(ListOfTypes),
-    ?LET(NewLen, fixed_list(range(0, Len)), lists:sublist(Random, NewLen)).
+    ?LET(NewLen, range(0, Len), lists:sublist(Random, NewLen)).
 
 sublist(MaxLen, ListOfTypes) ->
     Len = min(length(ListOfTypes), MaxLen),
     Random = ?LET(X, ListOfTypes, shuffle(X)),
     ?LET({NewLen, RandomValue},
-         {fixed_list(range(0, Len)), Random},
+         {range(0, Len), ListOfTypes},
          lists:sublist(RandomValue, NewLen)).
 
 range_list(MinLen, MaxLen, Type) ->

@@ -15,8 +15,7 @@ erase_matched(MatchAST, AnnAST, FileFormat, TabWidth) ->
     {MatchS, MatchE} = get_range(MatchAST),
     SP = get_syntax_path(MatchAST),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
+    Str = ast_to_string(FileFormat, AnnAST, TabWidth),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     {BeforeToks, _MatchedToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
     Toks1 = fix_and_join_toks(SP, BeforeToks, AfterToks),
@@ -24,8 +23,8 @@ erase_matched(MatchAST, AnnAST, FileFormat, TabWidth) ->
 
 tokens_to_ast(Toks, TabWidth, FileFormat) ->
     %% Convert result tokens back to ast
-    Bin = erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)),
-    TmpFilename = tmp_filenate(),
+    Bin = toks_to_binary(Toks),
+    TmpFilename = tmp_filename(),
     ok = file:write_file(TmpFilename, Bin),
     {ok, {AnnAST1,_Info}} = try
             wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
@@ -45,8 +44,7 @@ replace_matched_tokens(MatchAST, AnnAST, NewValueToks, FileFormat, TabWidth) ->
     %% Get range to erase
     {MatchS, MatchE} = get_range(MatchAST),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
+    Str = ast_to_string(FileFormat, AnnAST, TabWidth),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     {BeforeToks, _MatchedToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
     Toks1 = BeforeToks ++ NewValueToks ++ AfterToks,
@@ -136,7 +134,7 @@ partition_by_location(Loc, [Tok|Toks], Acc) ->
             {lists:reverse(Acc), [], [Tok|Toks]}
     end.
 
-tmp_filenate() ->
+tmp_filename() ->
     string:strip(os:cmd("mktemp"), right, $\n).
 
 term_to_tokens(Value, TabWidth, FileFormat) ->
@@ -146,15 +144,11 @@ term_to_tokens(Value, TabWidth, FileFormat) ->
 
 %% Pretty-printed `io_lib:format("~p", [Value])'
 pretty_print_term(Value) ->
-    Str = iolist_to_string(io_lib:format("~p.", [Value])),
+    Str = iolist_to_list(io_lib:format("~p.", [Value])),
     {ok,Forms,_} = erl_scan:string(Str),
     {ok,Exprs} = erl_parse:parse_exprs(Forms),
     Result = erl_prettypr:format(hd(Exprs)),
-    iolist_to_string(Result).
-
-iolist_to_string(Io) ->
-    Bin = erlang:iolist_to_binary(Io),
-    erlang:binary_to_list(Bin).
+    iolist_to_list(Result).
 
 %% `ElemValue' is term, not form or tree.
 %% `ListTree' is list, in which value should be inserted.
@@ -179,8 +173,7 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
     %% Get range to erase
     {_MatchS, MatchE} = get_range(ListTree),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
+    Str = ast_to_string(FileFormat, Tree, TabWidth),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     Toks1 = insert_tokens_before(MatchE, ElemValueToks, Toks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
@@ -192,8 +185,7 @@ append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth,
 add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileFormat, TabWidth, ListTreeElems) ->
     {PrevS,PrevE} = get_range(PrevElem),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
+    Str = ast_to_string(FileFormat, Tree, TabWidth),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     %% If we have left comment, that we assume that this comment is for
     %% the last argument of the list.
@@ -376,3 +368,12 @@ same_line_tabs_before_loc(Loc, Toks) ->
 
 whitespaces(Len) ->
     lists:duplicate(Len, {whitespace, {1,1}, ' '}).
+
+iolist_to_list(X) ->
+    erlang:binary_to_list(erlang:iolist_to_binary(X)).
+
+ast_to_string(FileFormat, Tree, TabWidth) ->
+    iolist_to_list(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)).
+
+toks_to_binary(Toks) ->
+    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)).

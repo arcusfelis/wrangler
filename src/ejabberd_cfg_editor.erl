@@ -76,9 +76,15 @@ add_module_2(Module, Tree, FileFormat, TabWidth, []) ->
     %% We assume that modules key exists in the file
     MatchModsF = fun(T, Mods, [{{modules,_}, _}], A) when is_list(Mods) -> [T|A];
                    (_,_,_, A) -> A end,
-    [ModsTree] = api_ast_traverse2:fold_values_with_path_values(MatchModsF, [], Tree1),
-    NewTree = wrangler_token_pp:append_list_element(ModsTree, Tree, NewElem, FileFormat, TabWidth),
-    {ok, NewTree, module_added};
+    case api_ast_traverse2:fold_values_with_path_values(MatchModsF, [], Tree1) of
+        [] ->
+            error_logger:error_msg("issue=\"Failed to find 'modules' section\", tree:~n~p",
+                                   [Tree]),
+            erlang:error(missing_modules_section);
+        [ModsTree] ->
+            NewTree = wrangler_token_pp:append_list_element(ModsTree, Tree, NewElem, FileFormat, TabWidth),
+            {ok, NewTree, module_added}
+    end;
 add_module_2(Module, Tree, FileFormat, TabWidth, [ModTree]) ->
     {ok, Tree, module_already_defined}.
 

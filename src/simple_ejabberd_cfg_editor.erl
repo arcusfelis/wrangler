@@ -40,7 +40,7 @@ run_command({set_option, M, K, V}, C) ->
                     Mods2 = lists:keyreplace(M, 1, Mods, {M, Opts2}),
                     lists:keyreplace(modules, 1, C, {modules, Mods2});
                 false ->
-                    Opts2 = [{K,V}|Opts],
+                    Opts2 = Opts ++ [{K,V}], %% append new option
                     Mods2 = lists:keyreplace(M, 1, Mods, {M, Opts2}),
                     lists:keyreplace(modules, 1, C, {modules, Mods2})
             end

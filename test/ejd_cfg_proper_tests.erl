@@ -34,17 +34,102 @@ run_property_testing_gen() ->
     erlang:group_leader(whereis(user), self()),
     Res = proper:module(?MODULE, [{constraint_tries, 500}]),
     erlang:group_leader(EunitLeader, self()),
-    ?_assertEqual([], Res). 
+    ?_assertEqual([], Res).
 
 
-%% Execute random commands for random configs with
-%% simple_ejabberd_cfg_editor and ejabberd_cfg_editor and compare
 prop_simple() ->
     ?FORALL(Tree,
             ejd_config_tree,
         begin
         equals(1, 1)
         end).
+
+prop_to_binary() ->
+    ?FORALL({Terms, Comments}, {ejd_config(), comments()},
+            begin
+            Str = to_binary_with_random_comments(Terms, Comments),
+            ?WHENFAIL(io:format("String:~n~tsTerms:~n~w~nConsulted:~n~w~n",
+                                [Str, Terms, (catch element(2, string_consult(Str)))]),
+                      equals({ok, Terms}, string_consult(Str)))
+            end).
+
+%% Execute random commands for random configs with
+%% simple_ejabberd_cfg_editor and ejabberd_cfg_editor and compare
+prop_editor() ->
+    ?FORALL({{Bin, TermsIn}, Commands}, {ejd_config_binary_and_terms(), list(command())},
+        ?WHENFAIL(io:format("TermsIn:~n~p~nBinary:~n~ts~nCommands:~n~p~n",
+                            [TermsIn, Bin, Commands]),
+            with_tmpfile(fun(FilenameOut) ->
+                with_tmpfile(fun(Filename) ->
+                    ok = file:write_file(Filename, Bin),
+                    {ok, Terms} = file_consult(Filename),
+                    {ok, Tree} = wrangler_consult:consult(Filename),
+                    {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
+                    SimpleTermsOut0 = simple_ejabberd_cfg_editor:run_commands(Commands, Terms),
+                    %% okey, we can compare SimpleTermsOut0 with TermsOut. Oh, no. unicode.
+                    %% file:consult/1 returns code points in r17
+                    %% but bytes in r13. So lets write it and read again.
+                    {ok, SimpleTermsOut} = terms_reconsult(SimpleTermsOut0),
+                    ok = wrangler_consult:write_file(Filename, FilenameOut, Tree2),
+                    {ok, TermsOut} = file_consult(FilenameOut),
+                    ?WHENFAIL((catch io:format("Result file:~n~ts~nSimpleTermsOut:~n~p~nTermsOut:~n~p~n",
+                                               [element(2, file:read_file(FilenameOut)), SimpleTermsOut, TermsOut])),
+                              equals(SimpleTermsOut, TermsOut))
+                 end)
+            end))).
+
+with_tmpfile(F) ->
+    Filename = tmp_filename(),
+    try
+        F(Filename)
+    after
+        file:delete(Filename)
+    end.
+
+string_consult(Str) ->
+    {ok, Tokens, _} = erl_scan:string(erlang:binary_to_list(erlang:iolist_to_binary(Str))),
+    Values = [erl_parse_value(erl_parse:parse_term(Toks), Toks)
+              || Toks <- splitwithdot(Tokens)],
+    {ok, Values}.
+
+file_consult(Filename) ->
+    {ok, Bin} = file:read_file(Filename),
+    string_consult(Bin).
+    
+
+erl_parse_value({ok, Value}, _Toks) ->
+    Value.
+
+splitwithdot(Tokens) ->
+    MatchedNot = splitwith_all(fun({'.',_}) -> false; ({dot,_}) -> false; (_) -> true end, Tokens),
+    [add_dot(X) || {X,_} <- MatchedNot].
+
+add_dot(Toks) -> Toks ++ [{dot, {0,0}}].
+
+naive_string_consult(Str) ->
+    Filename = tmp_filename(),
+    try
+        ok = file:write_file(Filename, Str),
+        file:consult(Filename)
+    of {ok, Out} ->
+           {ok, Out};
+       {error, Error} ->
+           error_logger:error_msg("issue=\"Failed to string_consult\", string=~w", [Str]),
+           {error, Error}
+    after
+        file:delete(Filename)
+    end.
+
+tmp_filename() ->
+    string:strip(os:cmd("mktemp"), right, $\n).
+
+terms_reconsult(Terms) ->
+    Binary = terms_to_binary(Terms),
+    string_consult(Binary).
+
+terms_to_binary(Terms) ->
+    erlang:iolist_to_binary([io_lib:format("~p.~n", [X]) || X <- Terms]).
+
 
 host() -> string().
 inet_port() -> range(0, 65535).
@@ -104,6 +189,10 @@ ejd_config_binary() ->
     ?LET({Terms, Comments}, {ejd_config(), comments()},
         to_binary_with_random_comments(Terms, Comments)).
 
+ejd_config_binary_and_terms() ->
+    ?LET({Terms, Comments}, {ejd_config(), comments()},
+        {to_binary_with_random_comments(Terms, Comments), Terms}).
+
 comments() ->
     list(comment()).
 
@@ -121,6 +210,13 @@ comment_word() ->
      "access", "result", "error", "disable", "enable", "version", "port",
      "firewall", "table", "connection", "timeout", "600 seconds", "connects",
      "reconnects", "help", "me", "plz"].
+
+command() ->
+    oneof([{add_module, module_module()},
+           {add_module_after, module_module(), module_module()},
+           {delete_module, module_module()},
+           {set_option, module_module(), readable_key(), readable_value()},
+           {unset_option, module_module(), readable_key()}]).
 
 %% Spread comments across tokens
 to_binary_with_random_comments(Terms, Comments) ->
@@ -257,3 +353,26 @@ delete_first_whitespace([{whitespace,_,_}|T]) ->
     T;
 delete_first_whitespace([H|T]) ->
     delete_first_whitespace(T).
+
+%% @doc Recursive lists:splitwith/2 (kind of)
+%%
+%% Returns list of `{Matched, NotMatched}' tuples.
+%% Property:
+%% `List = lists:append([[Matched, NotMatched] || {Matched, NotMatched} <- Result]'
+%%
+%% Example:
+%% `lists2:splitwith_all(fun(X) -> X =/= $. end, "1234.54565..").'
+%%
+%% Result:
+%% `[{"1234","."},{"54565",".."}]'
+%%
+%% Source https://github.com/arcusfelis/lists2
+splitwith_all(_Pred, []) ->
+    [];
+splitwith_all(Pred, List) ->
+    {Matched, Others} = lists:splitwith(Pred, List),
+    {NotMatched, Others2} = not_splitwith(Pred, Others),
+    [{Matched, NotMatched}|splitwith_all(Pred, Others2)].
+
+not_splitwith(Pred, List) ->
+    lists:splitwith(fun(X) -> not Pred(X) end, List).

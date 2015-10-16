@@ -14,8 +14,8 @@ consult(Filename) ->
     Str = erlang:binary_to_list(Bin),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     Exprs = replace_dots_with_comma_keep_last(Toks),
-    Str2 = erlang:iolist_to_binary("consult()->" ++ wrangler_misc:concat_toks(Exprs)),
-    TmpFilename = tmp_filenate(),
+    Str2 = erlang:iolist_to_binary("consult()->" ++ toks_to_binary(Exprs)),
+    TmpFilename = tmp_filename(),
     ok = file:write_file(TmpFilename, Str2),
     {ok, {AnnAST,_Info}} = try
             wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
@@ -31,7 +31,7 @@ consult_terms(Terms) ->
 
 %% @doc Convert string to AST
 consult_string(String) ->
-    TmpFilename = tmp_filenate(),
+    TmpFilename = tmp_filename(),
     ok = file:write_file(TmpFilename, String),
     try
         consult(TmpFilename)
@@ -41,7 +41,7 @@ consult_string(String) ->
 
 terms_to_tokens(Terms, FileFormat) ->
     TabWidth = 4,
-    Str = erlang:binary_to_list(erlang:iolist_to_binary(terms_to_string(Terms))),
+    Str = iolist_to_list(terms_to_string(Terms)),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     {ok, Toks}.
 
@@ -73,7 +73,7 @@ write_file(FilenameOrig, FileNameOut, AnnAST) ->
     <<"consult()->", Bin3/binary>>  = Bin2,
     file:write_file(FileNameOut, Bin3).
 
-tmp_filenate() ->
+tmp_filename() ->
     string:strip(os:cmd("mktemp"), right, $\n).
 
 
@@ -112,7 +112,7 @@ get_delimitor(FileFormat) ->
 %% Replaces dots on the top level only
 replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
     %% Get actual AST
-    TmpFilename = tmp_filenate(),
+    TmpFilename = tmp_filename(),
     ok = file:write_file(TmpFilename, Bin),
     {ok, {AnnAST,_Info}} = wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
     Str = erlang:binary_to_list(Bin),
@@ -127,7 +127,7 @@ replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
 %   io:format("~nComLocs ~10000p ~nEndLocs ~10000p ~n", [AllCommaLocs, EndLocs]),
 
     Toks2 = replace_commas(Toks, ExpectedCommasLocs),
-    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks2)).
+    toks_to_binary(Toks2).
 
 %% Replace commans based on their location
 replace_commas([{',', CommaLoc}|Toks], MatchLocs) ->
@@ -173,3 +173,9 @@ expected_comma_logs([], _) ->
 list_init(List) ->
     [_|R] = lists:reverse(List),
     lists:reverse(R).
+
+toks_to_binary(Toks) ->
+    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)).
+
+iolist_to_list(X) ->
+    erlang:binary_to_list(erlang:iolist_to_binary(X)).
