@@ -2526,8 +2526,19 @@ binary_field(Body, Size, Types) ->
 binary_field(Body, Types) ->
     tree(binary_field,
 	 #binary_field{body = update_ann({syntax_path, binary_field_body}, Body), 
-                       types = [update_ann({syntax_path, binary_field_type}, T)
-                                ||T<-Types]}).
+                       types = [update_binary_type_ann(T) ||T<-Types]}).
+
+update_binary_type_ann(T) ->
+    case type(T) of
+    size_qualifier ->
+        Size = size_qualifier_argument(T),
+        Body = size_qualifier_body(T),
+        Body2 = update_binary_type_ann(Body),
+        size_qualifier(Body2, Size);
+    _ ->
+        update_ann({syntax_path, binary_field_type}, T)
+    end.
+
 
 revert_binary_field(Node) ->
     Pos = get_pos(Node),
@@ -5926,7 +5937,16 @@ abstract(T) when is_tuple(T) ->
 abstract(T) when is_binary(T) ->
     binary([binary_field(integer(B))
 	    || B <- binary_to_list(T)]);
+abstract(T) when is_bitstring(T) ->
+    binary([abstract_binary_field(X) || X <- erlang:bitstring_to_list(T)]);
 abstract(T) -> erlang:error({badarg, T}).
+
+abstract_binary_field(X) when is_integer(X) ->
+    binary_field(integer(X));
+abstract_binary_field(X) when is_bitstring(X) ->
+    Bits = erlang:bit_size(X),
+    <<Int:Bits>> = X,
+    binary_field(integer(Int), integer(Bits), []).
 
 abstract_list([T | Ts]) ->
     [abstract(T) | abstract_list(Ts)];
@@ -5985,7 +6005,7 @@ concrete(Node) ->
 	       || F <- binary_fields(Node)],
 	  {value, B, _} = eval_bits:expr_grp(Fs, [],
 					     fun (F, _) ->
-						     {value, concrete(F), []}
+						     {value, concrete_field(F), []}
 					     end,
 					     [], true),
 	  B;
@@ -5995,6 +6015,14 @@ concrete(Node) ->
 concrete_list([E | Es]) ->
     [concrete(E) | concrete_list(Es)];
 concrete_list([]) -> [].
+
+concrete_field(F) ->
+    case type(F) of
+        size_qualifier ->
+            concrete(size_qualifier_body(F));
+        _ ->
+            concrete(F)
+    end.
 
 %% =====================================================================
 %% @spec is_literal(Node::syntaxTree()) -> bool()
