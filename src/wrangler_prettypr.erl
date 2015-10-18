@@ -522,7 +522,6 @@ lay_2(Node, Ctxt) ->
 	    text(wrangler_syntax:text_string(Node));
 	string ->  
 	    Str = wrangler_syntax:string_literal(Node),
-	    StrVal = "\"" ++ wrangler_syntax:string_value(Node) ++ "\"",
 	    case lists:keysearch(toks, 1, wrangler_syntax:get_ann(Node)) of
 		{value, {toks, StrToks}} ->
 		    Str1 = io_lib:write_string(
@@ -532,9 +531,9 @@ lay_2(Node, Ctxt) ->
 					     end, StrToks))),
 		    case Str1 == Str of
 			true -> lay_string(StrToks);
-			_ -> lay_string(StrVal, Ctxt)
+			_ -> lay_string(Str, Ctxt)
 		    end;
-		_ -> lay_string(StrVal, Ctxt)
+		_ -> lay_string(Str, Ctxt)
 	    end;
 	nil -> 
             text("[]");

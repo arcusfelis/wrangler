@@ -1610,7 +1610,7 @@ char_literal(Node) ->
 string(String) -> tree(string, String).
 
 revert_string(Node) ->
-    Pos = get_pos(Node), {string, Pos, string_value(Node)}.
+    Pos = get_pos(Node), {string, Pos, string_literal(Node)}.
 
 %% =====================================================================
 %% @spec is_string(Node::syntaxTree(), Value::string()) -> bool()
@@ -1636,10 +1636,23 @@ is_string(Node, Value) ->
 %% @see string/1
 
 string_value(Node) ->
+    string_unescaped(Node).
+
+string_unescaped(Node) ->
+    unescape_string(string_escaped(Node)).
+
+string_escaped(Node) ->
     case unwrap(Node) of
       {string, _, List} -> List;
       Node1 -> data(Node1)
     end.
+
+unescape_string([$\\,H|T]) ->
+    [wrangler_scan:escape_char(H)|unescape_string(T)];
+unescape_string([H|T]) ->
+    [H|unescape_string(T)];
+unescape_string([]) ->
+    [].
 
 %% =====================================================================
 %% @spec string_literal(syntaxTree()) -> string()
@@ -1650,7 +1663,7 @@ string_value(Node) ->
 %% @see string/1
 
 string_literal(Node) ->
-    io_lib:write_string(string_value(Node)).
+    "\"" ++ string_escaped(Node) ++ "\"".
 
 %% =====================================================================
 %% @spec atom(Name) -> syntaxTree()
@@ -5995,15 +6008,17 @@ concrete(Node) ->
       tuple ->
 	  list_to_tuple(concrete_list(tuple_elements(Node)));
       binary ->
-	  Fs =
+      Fs = binary_fields(Node),
+      Fs1 = replace_strings_in_binary_fields_with_integers(Fs),
+	  Fs2 =
 	      [revert_binary_field(binary_field(binary_field_body(F),
 						case binary_field_size(F) of
 						  none -> none;
 						  S -> revert(S)
 						end,
 						binary_field_types(F)))
-	       || F <- binary_fields(Node)],
-	  {value, B, _} = eval_bits:expr_grp(Fs, [],
+	       || F <- Fs1],
+	  {value, B, _} = eval_bits:expr_grp(Fs2, [],
 					     fun (F, _) ->
 						     {value, concrete_field(F), []}
 					     end,
@@ -6015,6 +6030,28 @@ concrete(Node) ->
       concrete(binary_field_body(Node));
       _ -> erlang:error({badarg, Node})
     end.
+
+%% Note: body contains escaped string (not like in otp)
+%% {ok, Tokens1, _} = erl_scan:string("<<\"\\n\">>.").
+%% {ok,[{'<<',1},{string,1,"\n"},{'>>',1},{dot,1}],1}
+%% {ok, Tokens2, _} = wrangler_scan:string("<<\"\\n\">>.").
+%% {ok,[{'<<',{1,1}}, {string,{1,3},"\\n"}, {'>>',{1,7}}, {dot,{1,9}}], {1,9}}
+%%
+%% Example: <<"string", 1,2,3>>
+%% "string" is a string in binary.
+replace_strings_in_binary_fields_with_integers(Fs) ->
+    lists:flatmap(fun replace_string_in_binary_fields_with_integers/1, Fs).
+
+replace_string_in_binary_fields_with_integers(F) ->
+    Body = binary_field_body(F),
+    case type(Body) of
+        string ->
+            String = concrete(Body),
+            [binary_field(integer(Byte)) || Byte <- String];
+        _ ->
+            [F]
+    end.
+
 
 concrete_list([E | Es]) ->
     [concrete(E) | concrete_list(Es)];

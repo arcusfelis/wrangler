@@ -27,6 +27,8 @@
 
 -compile(export_all).
 
+-export([escape_char/1]). %% for wrangler_syntax
+
 -import(lists, [member/2, reverse/1]).
 
 -define(DEFAULT_TABWIDTH, 8).
