@@ -6008,22 +6008,11 @@ concrete(Node) ->
 						     {value, concrete_field(F), []}
 					     end,
 					     [], true),
-	  B;
+      B;
       binary_field ->
-      F = Node,
-	  Fs =
-	      [revert_binary_field(binary_field(binary_field_body(F),
-						case binary_field_size(F) of
-						  none -> none;
-						  S -> revert(S)
-						end,
-						binary_field_types(F)))],
-	  {value, B, _} = eval_bits:expr_grp(Fs, [],
-					     fun (F, _) ->
-						     {value, concrete_field(F), []}
-					     end,
-					     [], true),
-	  <<B>>;
+      %% not concrete_field/1 because we want to be compatible
+      %% with erl_parse output
+      concrete(binary_field_body(Node));
       _ -> erlang:error({badarg, Node})
     end.
 
