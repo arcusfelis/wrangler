@@ -9,6 +9,62 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% ------------------------------------------------------------------
+%% Specific bugs
+%% ------------------------------------------------------------------
+
+abstract_concrete_test_() ->
+    io:format(user, "~p~n", [string_to_binary_tree("\\n")]),
+    [?_assertEqual(1, wrangler_syntax:concrete(wrangler_syntax:abstract(1))),
+     ?_assertEqual(<<"mz">>, wrangler_syntax:concrete(wrangler_syntax:abstract(<<"mz">>))),
+     ?_assertEqual(<<"mz">>, wrangler_syntax:concrete(string_to_binary_tree("mz"))),
+     ?_assertEqual(<<"\n">>, wrangler_syntax:concrete(string_to_binary_tree("\n"))),
+     ?_assertEqual(<<"\r">>, wrangler_syntax:concrete(string_to_binary_tree("\r"))),
+     ?_assertEqual(<<"\\n">>, wrangler_syntax:concrete(string_to_binary_tree("\\n"))),
+     ?_assertEqual("\\n", wrangler_syntax:string_value(
+                                wrangler_syntax:binary_field_body(
+                                  hd(wrangler_syntax:binary_fields(
+                                      string_to_binary_tree("\\n")))))),
+
+     ?_assertEqual(simple_fold_parse(wrangler_syntax:abstract(<<"mz">>)),
+                   simple_fold_concrete(wrangler_syntax:abstract(<<"mz">>))),
+     ?_assertEqual(simple_fold_parse(wrangler_syntax:abstract(<<0:1>>)),
+                   simple_fold_concrete(wrangler_syntax:abstract(<<0:1>>))),
+     ?_assertEqual(fold_parse(string_to_binary_tree("mz")),
+                   fold_concrete(string_to_binary_tree("mz"))),
+     ?_assertEqual(fold_parse(string_to_binary_tree("\n")),
+                   fold_concrete(string_to_binary_tree("\n"))),
+     ?_assertEqual(fold_parse(string_to_binary_tree("\\n")),
+                   fold_concrete(string_to_binary_tree("\\n"))),
+     ?_assertEqual(fold_parse(string_to_binary_tree("\\r")),
+                   fold_concrete(string_to_binary_tree("\\r"))),
+     ?_assertEqual(fold_parse(string_to_binary_tree("\\e")),
+                   fold_concrete(string_to_binary_tree("\\e"))),
+     ?_assertEqual(<<"\n\n<<\"\\\\n\">>">>,
+                   erlang:iolist_to_binary(wrangler_prettypr:pp_a_form(string_to_binary_tree("\\n"), unix, [], 4)))].
+
+string_to_binary_tree(S) ->
+    EscapedString = io_lib:write_string(S),
+    CroppedString = tl(lists:reverse(tl(lists:reverse(EscapedString)))),
+    wrangler_syntax:binary([wrangler_syntax:binary_field(wrangler_syntax:string(CroppedString))]).
+
+simple_fold_concrete(Tree) ->
+    Trees = api_ast_traverse:fold(fun(T,A) -> [T|A] end, [], Tree),
+    [{wrangler_syntax:type(T), simplify_error_reason(api_ast_traverse2:tree_to_term_using_concrete(T))} || T <- Trees].
+
+simple_fold_parse(Tree) ->
+    Trees = api_ast_traverse:fold(fun(T,A) -> [T|A] end, [], Tree),
+    [{wrangler_syntax:type(T), simplify_error_reason(api_ast_traverse2:tree_to_term_using_parser(T))} || T <- Trees].
+
+fold_concrete(Tree) ->
+    Trees = api_ast_traverse:fold(fun(T,A) -> [T|A] end, [], Tree),
+    [{wrangler_syntax:type(T), api_ast_traverse2:tree_to_term_using_concrete(T)} || T <- Trees].
+
+fold_parse(Tree) ->
+    Trees = api_ast_traverse:fold(fun(T,A) -> [T|A] end, [], Tree),
+    [{wrangler_syntax:type(T), api_ast_traverse2:tree_to_term_using_parser(T)} || T <- Trees].
+
+
+%% ------------------------------------------------------------------
 %% Call test generators
 %% ------------------------------------------------------------------
 
@@ -44,6 +100,12 @@ prop_simple() ->
         equals(1, 1)
         end).
 
+prop_abstract_concrete() ->
+    ?FORALL(Term, term(),
+        ?WHENFAIL(io:format("Terms:~n~p~n",
+                            [Term]),
+                  equals(Term, wrangler_syntax:concrete(wrangler_syntax:abstract(Term))))).
+
 prop_to_binary() ->
     ?FORALL({Terms, Comments}, {ejd_config(), comments()},
             begin
@@ -53,6 +115,32 @@ prop_to_binary() ->
                       equals({ok, Terms}, string_consult(Str)))
             end).
 
+
+prop_tree_to_term() ->
+    ?FORALL({Bin, TermsIn}, ejd_config_binary_and_terms(),
+        ?WHENFAIL(io:format("TermsIn:~n~p~nBinary:~n~ts~n",
+                            [TermsIn, Bin]),
+            with_tmpfile(fun(Filename) ->
+                ok = file:write_file(Filename, Bin),
+                {ok, Tree} = wrangler_consult:consult(Filename),
+                Trees = api_ast_traverse:fold(fun(T,A) -> [T|A] end, [], Tree),
+                Terms1 = [api_ast_traverse2:tree_to_term_using_parser(T) || T <- Trees],
+                Terms2 = [api_ast_traverse2:tree_to_term_using_concrete(T) || T <- Trees],
+                Terms3 = [simplify_error_reason(X) || X <- Terms1],
+                Terms4 = [simplify_error_reason(X) || X <- Terms2],
+                %% T1 parser, T2 concrete
+                ?WHENFAIL([io:format("T1 ~p~nT2 ~p~n", [T1, T2])
+                           ||{T1,T2} <- lists:zip(Terms1, Terms2),
+                             simplify_error_reason(T1) =/= simplify_error_reason(T2)],
+                          equals(Terms3, Terms4))
+        end))).
+
+simplify_error_reason({error, _Reason}) ->
+    {error, error};
+simplify_error_reason(X) ->
+    X.
+
+
 %% Execute random commands for random configs with
 %% simple_ejabberd_cfg_editor and ejabberd_cfg_editor and compare
 prop_editor() ->
@@ -61,11 +149,14 @@ prop_editor() ->
                             [TermsIn, Bin, Commands]),
             with_tmpfile(fun(FilenameOut) ->
                 with_tmpfile(fun(Filename) ->
+                    io:format("Commands ~p / Bin ~p~n", [length(Commands), byte_size(Bin)]),
                     ok = file:write_file(Filename, Bin),
+                    io:format("s ~p~n", [now()]),
                     {ok, Terms} = file_consult(Filename),
                     {ok, Tree} = wrangler_consult:consult(Filename),
                     {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
                     SimpleTermsOut0 = simple_ejabberd_cfg_editor:run_commands(Commands, Terms),
+                    io:format("e ~p~n", [now()]),
                     %% okey, we can compare SimpleTermsOut0 with TermsOut. Oh, no. unicode.
                     %% file:consult/1 returns code points in r17
                     %% but bytes in r13. So lets write it and read again.
@@ -95,7 +186,6 @@ string_consult(Str) ->
 file_consult(Filename) ->
     {ok, Bin} = file:read_file(Filename),
     string_consult(Bin).
-    
 
 erl_parse_value({ok, Value}, _Toks) ->
     Value.

@@ -9,8 +9,10 @@
          flatfoldmap_values_with_path_values/3,
          fold_values_with_path_values/3]).
 
-%% debug
--export([tree_to_term/1]).
+%% debug/tests
+-export([tree_to_term/1,
+         tree_to_term_using_parser/1,
+         tree_to_term_using_concrete/1]).
 
 flatmap_subtrees(F, Tree) when is_function(F, 1) ->
     case wrangler_syntax:subtrees(Tree) of
@@ -167,10 +169,21 @@ fold_values_with_path_values(F, Acc, Tree) when is_function(F, 4) ->
     {_NewTree, Acc2} = flatfoldmap_values_with_path_values(FF, Acc, Tree),
     Acc2.
 
+tree_to_term(WranglerAST) ->
+    tree_to_term_using_concrete(WranglerAST).
+
+tree_to_term_using_concrete(WranglerAST) ->
+    try
+        Term = wrangler_syntax:concrete(WranglerAST),
+        {ok, Term}
+    catch Class:Reason ->
+        {error, {Class,Reason}}
+    end.
+
 %% erl_eval MUST not be used with wrangler AST trees
 %% It's will eval integers as strings ("1" instead of 1).
 %% WranglerAST is expression tree
-tree_to_term(WranglerAST) ->
+tree_to_term_using_parser(WranglerAST) ->
     Str = tree_to_string(WranglerAST),
     string_parse(Str ++ ".").
 

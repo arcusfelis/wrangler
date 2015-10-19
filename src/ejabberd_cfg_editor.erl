@@ -11,7 +11,9 @@ run_commands(Commands, Tree, FileFormat, TabWidth) ->
 
 
 run_commands([Command|Commands], Tree, FileFormat, TabWidth, Results) ->
+    io:format("s run_commands ~p~n", [Command]),
     {ok, Tree2, Res} = run_command(Command, Tree, FileFormat, TabWidth),
+    io:format("e run_commands ~p~n", [Command]),
     run_commands(Commands, Tree2, FileFormat, TabWidth, [Res|Results]);
 run_commands([], Tree, _FileFormat, _TabWidth, Results) ->
     {ok, Tree, Results}.
@@ -68,6 +70,7 @@ add_module(Module, Tree, FileFormat, TabWidth)
                         when M =:= Module -> [T|A];
                    (_,_,_, A) -> A end,
     Acc = api_ast_traverse2:fold_values_with_path_values(MatchModF, [], Tree1),
+    io:format("add_module~n",[]),
     add_module_2(Module, Tree, FileFormat, TabWidth, Acc).
 
 add_module_2(Module, Tree, FileFormat, TabWidth, []) ->
