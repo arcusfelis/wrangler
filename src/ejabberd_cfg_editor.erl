@@ -42,14 +42,13 @@ add_module_after(Module, AfterModule, Tree, FileFormat, TabWidth)
                    (_,_,_, A) -> A end,
     Acc = api_ast_traverse2:fold_values_with_path_values(MatchModF, [], Tree2),
     AfterAcc = api_ast_traverse2:fold_values_with_path_values(MatchAfterModF, [], Tree2),
-    add_module_after_2(Module, Tree, FileFormat, TabWidth, Acc, AfterAcc).
+    add_module_after_2(Module, Tree, Tree2, FileFormat, TabWidth, Acc, AfterAcc).
 
-add_module_after_2(Module, Tree, FileFormat, TabWidth, [], []) ->
+add_module_after_2(Module, Tree, Tree2, FileFormat, TabWidth, [], []) ->
     %% Not found, insert at the end
-    add_module(Module, Tree, FileFormat, TabWidth);
-add_module_after_2(Module, Tree, FileFormat, TabWidth, [], [AfterModTree]) ->
-    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
-    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+%   add_module(Module, Tree, FileFormat, TabWidth);
+    add_module_2(Module, Tree, Tree2, FileFormat, TabWidth, []);
+add_module_after_2(Module, Tree, Tree2, FileFormat, TabWidth, [], [AfterModTree]) ->
     NewElem = {Module, []},
     %% We assume that modules key exists in the file
     MatchModsF = fun(T, Mods, [{{modules,_}, _}], A) when is_list(Mods) -> [T|A];
@@ -57,7 +56,7 @@ add_module_after_2(Module, Tree, FileFormat, TabWidth, [], [AfterModTree]) ->
     [ModsTree] = api_ast_traverse2:fold_values_with_path_values(MatchModsF, [], Tree2),
     NewTree = wrangler_token_pp:insert_another_list_element_after(ModsTree, Tree, NewElem, AfterModTree, FileFormat, TabWidth),
     {ok, NewTree, module_added_after};
-add_module_after_2(Module, Tree, FileFormat, TabWidth, [ModTree], _) ->
+add_module_after_2(Module, Tree, Tree2, FileFormat, TabWidth, [ModTree], _) ->
     {ok, Tree, module_already_defined}.
 
 
@@ -74,9 +73,9 @@ add_module(Module, Tree, FileFormat, TabWidth)
                    (_,_,_, A) -> A end,
     Acc = api_ast_traverse2:fold_values_with_path_values(MatchModF, [], Tree2),
     io:format("add_module~n",[]),
-    add_module_2(Module, Tree, FileFormat, TabWidth, Acc).
+    add_module_2(Module, Tree, Tree2, FileFormat, TabWidth, Acc).
 
-add_module_2(Module, Tree, FileFormat, TabWidth, []) ->
+add_module_2(Module, Tree, Tree2, FileFormat, TabWidth, []) ->
     Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
     Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
     NewElem = {Module, []},
@@ -92,7 +91,7 @@ add_module_2(Module, Tree, FileFormat, TabWidth, []) ->
             NewTree = wrangler_token_pp:append_list_element(ModsTree, Tree, NewElem, FileFormat, TabWidth),
             {ok, NewTree, module_added}
     end;
-add_module_2(Module, Tree, FileFormat, TabWidth, [ModTree]) ->
+add_module_2(Module, Tree, _Tree2, FileFormat, TabWidth, [ModTree]) ->
     {ok, Tree, module_already_defined}.
 
 %% Delete module

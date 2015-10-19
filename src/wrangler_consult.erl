@@ -7,22 +7,31 @@
 
 -export([terms_to_tokens/2]).
 
+-export([string_to_consult/3,
+         string_to_ast/3]).
+
+string_to_consult(Str, TabWidth, FileFormat) ->
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Exprs = replace_dots_with_comma_keep_last(Toks),
+    erlang:iolist_to_binary("consult()->\n" ++ toks_to_binary(Exprs)).
+
 consult(Filename) ->
     FileFormat = wrangler_misc:file_format(Filename),
     TabWidth = 4,
     {ok, Bin} = file:read_file(Filename),
     Str = erlang:binary_to_list(Bin),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    Exprs = replace_dots_with_comma_keep_last(Toks),
-    Str2 = erlang:iolist_to_binary("consult()->" ++ toks_to_binary(Exprs)),
-    TmpFilename = tmp_filename(),
-    ok = file:write_file(TmpFilename, Str2),
-    {ok, {AnnAST,_Info}} = try
-            wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
-        after
-            ok = file:delete(TmpFilename)
-        end,
-    {ok, AnnAST}.
+    Str2 = string_to_consult(Str, TabWidth, FileFormat),
+    string_to_ast(Str2, TabWidth, FileFormat).
+
+string_to_ast(Str, TabWidth, FileFormat) ->
+    with_tmpfile(fun(TmpFilename) ->
+        ok = file:write_file(TmpFilename, Str),
+        {ok, {AnnAST,_Info}} =
+                %% Does not work correctly with consult_binary4()
+                wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
+%               wrangler_ast_server:quick_parse_annotate_file(TmpFilename, [], 4),
+        {ok, AnnAST}
+        end).
 
 %% @doc Convert terms to AST
 consult_terms(Terms) ->
@@ -70,8 +79,17 @@ write_file(FilenameOrig, FileNameOut, AnnAST) ->
     FileFormat = wrangler_misc:file_format(FilenameOrig),
     Bin = list_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
     Bin2 = replace_commas_with_dots(Bin, TabWidth, FileFormat),
-    <<"consult()->", Bin3/binary>>  = Bin2,
+    Bin3 = remove_consult(Bin2),
     file:write_file(FileNameOut, Bin3).
+
+remove_consult(<<"consult()->",Bin/binary>>) -> Bin;
+%% something is wrong, it was prettyprinted
+remove_consult(<<"\r\n\r\nconsult() -> ",Bin/binary>>) -> Bin;
+remove_consult(<<"\r\rconsult() -> ",Bin/binary>>) -> Bin;
+remove_consult(<<"\n\nconsult() -> ",Bin/binary>>) -> Bin;
+remove_consult(<<"\r\n\r\nconsult() ->\n",Bin/binary>>) -> Bin;
+remove_consult(<<"\r\rconsult() ->\n",Bin/binary>>) -> Bin;
+remove_consult(<<"\n\nconsult() ->\n",Bin/binary>>) -> Bin.
 
 tmp_filename() ->
     string:strip(os:cmd("mktemp"), right, $\n).
@@ -111,13 +129,14 @@ get_delimitor(FileFormat) ->
 
 %% Replaces dots on the top level only
 replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
+    Str = binary_to_list(Bin),
     %% Get actual AST
-    TmpFilename = tmp_filename(),
-    ok = file:write_file(TmpFilename, Bin),
-    {ok, {AnnAST,_Info}} = wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
-    Str = erlang:binary_to_list(Bin),
+    {ok, AnnAST} = string_to_ast(Str, TabWidth, FileFormat),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    FunAST = hd(wrangler_syntax:form_list_elements(AnnAST)),
+    io:format(user, "Node types ~p~n", [[wrangler_syntax:type(Node)
+                                         || Node <- wrangler_syntax:form_list_elements(AnnAST)]]),
+    FunAST = hd([Node || Node <- wrangler_syntax:form_list_elements(AnnAST),
+                         lists:member(wrangler_syntax:type(Node), [function,eof_marker])]),
     ClauseAST = hd(wrangler_syntax:function_clauses(FunAST)),
     ExprASTs = wrangler_syntax:clause_body(ClauseAST),
     EndLocs = [get_range_end(ExprAST) || ExprAST <- ExprASTs],
@@ -179,3 +198,11 @@ toks_to_binary(Toks) ->
 
 iolist_to_list(X) ->
     erlang:binary_to_list(erlang:iolist_to_binary(X)).
+
+with_tmpfile(F) ->
+    Filename = tmp_filename(),
+    try
+        F(Filename)
+    after
+        file:delete(Filename)
+    end.

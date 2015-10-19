@@ -113,10 +113,16 @@ print_a_form_and_get_changes(Form, FileFmt, Options, TabWidth) ->
  
        
 print_a_form_and_get_changes_1(Form, FileFormat, Options, TabWidth) ->
+    io:format("s print_a_form_and_get_changes_1~n", []),
     {OrigFormStr, NewFormStr} = pp_a_form_1(Form, FileFormat, Options, TabWidth),
+    io:format("s scan~n", []),
     {ok, OrigToks, _} = wrangler_scan:string(OrigFormStr),
     {ok, NewToks, _} = wrangler_scan:string(NewFormStr),
+    io:format("s get_changes~n", []),
     Change =get_changes(OrigToks, NewToks),
+    io:format("e get_changes~n", []),
+    io:format("get_changes=~p~n", [Change]),
+    io:format("e print_a_form_and_get_changes_1~n", []),
     {NewFormStr, Change}.
 
  
@@ -136,8 +142,11 @@ pp_a_form_1(Form, FileFormat, Options, TabWidth) ->
 		 format = FileFormat,
 		 tabwidth = TabWidth,
 		 tokens = wrangler_misc:get_toks(Form)},
+    io:format(user, "s concat~n", []),
     OrigFormStr=wrangler_misc:concat_toks(wrangler_misc:get_toks(Form)),
+    io:format(user, "s print~n", []),
     NewFormStr0= print_form(Form,reset_prec(Ctxt),fun lay/2),
+    io:format(user, "s repair~n", []),
     NewFormStr=repair_new_form_str(OrigFormStr, NewFormStr0, TabWidth, FileFormat),
     {OrigFormStr, NewFormStr}.
    
@@ -521,7 +530,16 @@ lay_2(Node, Ctxt) ->
 	text -> 
 	    text(wrangler_syntax:text_string(Node));
 	string ->  
-	    Str = wrangler_syntax:string_literal(Node),
+        %% Original characters between double quates
+	    StrVal = wrangler_syntax:string_value(Node),
+        %% Original with double quates
+	    StrLit = wrangler_syntax:string_literal(Node),
+        %% Format again
+      % Str = io_lib:write_string(wrangler_syntax:string_concrete(Node)),
+
+        %% Quate again for comparation
+        CmpStr = io_lib:write_string(StrVal),
+
 	    case lists:keysearch(toks, 1, wrangler_syntax:get_ann(Node)) of
 		{value, {toks, StrToks}} ->
 		    Str1 = io_lib:write_string(
@@ -529,11 +547,11 @@ lay_2(Node, Ctxt) ->
 					    (fun ({string, _, S}) 
 						 -> S 
 					     end, StrToks))),
-		    case Str1 == Str of
+		    case Str1 == CmpStr of
 			true -> lay_string(StrToks);
-			_ -> lay_string(Str, Ctxt)
+			_ -> lay_string(StrLit, Ctxt)
 		    end;
-		_ -> lay_string(Str, Ctxt)
+		_ -> lay_string(StrLit, Ctxt)
 	    end;
 	nil -> 
             text("[]");
@@ -2366,7 +2384,11 @@ get_end_loc_with_comment(Node) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 repair_new_form_str("", NewFormStr, _TabWidth, _FileFormat) -> NewFormStr;
+repair_new_form_str(NewFormStr, NewFormStr, _TabWidth, _FileFormat) -> NewFormStr; %% no changes
+repair_new_form_str(_OldFormStr, "", _TabWidth, _FileFormat) -> ""; %% new string is empty, skip
 repair_new_form_str(OldFormStr, NewFormStr, TabWidth, FileFormat)->
+    io:format(user, "OldFormStr ~p~n", [OldFormStr]),
+    io:format(user, "NewFormStr ~p~n", [NewFormStr]),
     {ok, OldToks0, _} = wrangler_scan_with_layout:string(OldFormStr, {1,1}, TabWidth, FileFormat),
     OldToksByLine =group_toks_by_line(OldToks0),
     Str1 = get_leading_whites(OldToksByLine),

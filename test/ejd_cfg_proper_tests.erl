@@ -20,7 +20,7 @@ abstract_concrete_test_() ->
      ?_assertEqual(<<"\n">>, wrangler_syntax:concrete(string_to_binary_tree("\n"))),
      ?_assertEqual(<<"\r">>, wrangler_syntax:concrete(string_to_binary_tree("\r"))),
      ?_assertEqual(<<"\\n">>, wrangler_syntax:concrete(string_to_binary_tree("\\n"))),
-     ?_assertEqual("\\n", wrangler_syntax:string_value(
+     ?_assertEqual("\\n", wrangler_syntax:string_concrete(
                                 wrangler_syntax:binary_field_body(
                                   hd(wrangler_syntax:binary_fields(
                                       string_to_binary_tree("\\n")))))),
@@ -41,6 +41,105 @@ abstract_concrete_test_() ->
                    fold_concrete(string_to_binary_tree("\\e"))),
      ?_assertEqual(<<"\n\n<<\"\\\\n\">>">>,
                    erlang:iolist_to_binary(wrangler_prettypr:pp_a_form(string_to_binary_tree("\\n"), unix, [], 4)))].
+
+
+tree_to_binary(Bin, Tree) ->
+    with_tmpfile(fun(Filename) ->
+                    with_tmpfile(fun(FilenameOut) ->
+                        ok = file:write_file(Filename, Bin),
+                        ok = wrangler_consult:write_file(Filename, FilenameOut, Tree),
+                        {ok, BinWritten} = file:read_file(Filename),
+                        BinWritten
+                    end)
+                end).
+
+config_binary1() ->
+    <<"{loglevel,5}.\n"
+            "{hosts,[]}.\n"
+            "{listen,[{80,mod_test,[]}]}.\n"
+            "{modules,[{mod_test,[]}]}.">>.
+
+config_binary2() ->
+    <<"{loglevel,1}.\n"
+      "{hosts,[]}.\n"
+      "{listen,[]} % does\n"
+      "            % does\n"
+      "            % does\n"
+      ".\n"
+      "{modules,[]}.">>.
+
+config_binary3() ->
+    <<"{loglevel,1}.\n"
+      "{hosts,[]}.\n"
+      "{listen,[]} % does\n"
+      "            % does\n"
+      "            % does\n"
+      ".\n"
+      "{modules,[{mod_odbc,[]}]}.">>.
+
+config_binary4() ->
+    <<"{loglevel,1}.\n"
+      "{hosts,[]}.\n"
+      "{listen,[]} % does\n"
+      "            % does\n"
+      "            % does\n"
+      ".\n"
+      "{modules,[{mod_odbc,[]},{mod_odbc_mysql,[]}]}.">>.
+
+consult_binary4() ->
+    <<"consult()->\n"
+      "{loglevel,1},\n"
+      "{hosts,[]},\n"
+      "{listen,[]} % does\n            % does\n            % does\n,"
+      "\n{modules,[]}.">>.
+
+write_config_test() ->
+    Bin = <<"config.">>,
+    {ok, Tree} = wrangler_consult:consult_string(Bin),
+    BinOut = tree_to_binary(Bin, Tree),
+    io:format("Old ~p~nNew ~p~n", [Bin, BinOut]),
+    ?assertEqual(Bin, BinOut).
+
+write_config1_test() ->
+    Bin = config_binary1(),
+    {ok, Tree} = wrangler_consult:consult_string(Bin),
+    BinOut = tree_to_binary(Bin, Tree),
+    io:format("Old ~p~nNew ~p~n", [Bin, BinOut]),
+    ?assertEqual(Bin, BinOut).
+
+write_config2_test() ->
+    Bin = config_binary2(),
+    {ok, Tree} = wrangler_consult:consult_string(Bin),
+    BinOut = tree_to_binary(Bin, Tree),
+    io:format("Old ~p~nNew ~p~n", [Bin, BinOut]),
+    ?assertEqual(Bin, BinOut).
+
+add_module_after_x_x_test() ->
+    Bin = config_binary1(),
+    Commands = [{add_module_after,mod_odbc_mysql,mod_odbc_mysql}],
+    {ok, Tree} = wrangler_consult:consult_string(Bin),
+    {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
+    BinOut = tree_to_binary(Bin, Tree2),
+    ?assertEqual(Bin, BinOut).
+
+add_module_test() ->
+    Bin = config_binary2(),
+    Commands = [{add_module,mod_odbc}],
+    {ok, Tree} = wrangler_consult:consult_string(Bin),
+    {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
+    BinOut = tree_to_binary(Bin, Tree2),
+    Expected = config_binary3(),
+    io:format(user, "BinOut ~p~nExpected ~p~n", [BinOut, Expected]),
+    ?assertEqual(Expected, BinOut).
+
+add_two_modules_test() ->
+    Bin = config_binary2(),
+    Commands = [{add_module,mod_odbc},{add_module,mod_odbc_mysql}],
+    {ok, Tree} = wrangler_consult:consult_string(Bin),
+    {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
+    BinOut = tree_to_binary(Bin, Tree2),
+    Expected = config_binary4(),
+    ?assertEqual(Expected, BinOut).
 
 string_to_binary_tree(S) ->
     EscapedString = io_lib:write_string(S),
@@ -106,6 +205,14 @@ prop_abstract_concrete() ->
                             [Term]),
                   equals(Term, wrangler_syntax:concrete(wrangler_syntax:abstract(Term))))).
 
+prop_overwrite_concrete() ->
+    ?FORALL(Term, term(),
+        ?WHENFAIL(io:format("Terms:~n~p~n",
+                            [Term]),
+                  equals(Term, wrangler_syntax:concrete(
+                                 api_ast_traverse2:overwrite_concretes(
+                                   wrangler_syntax:abstract(Term)))))).
+
 prop_to_binary() ->
     ?FORALL({Terms, Comments}, {ejd_config(), comments()},
             begin
@@ -149,20 +256,25 @@ prop_editor() ->
                             [TermsIn, Bin, Commands]),
             with_tmpfile(fun(FilenameOut) ->
                 with_tmpfile(fun(Filename) ->
+                    io:format("~n~nS ~p~n", [now()]),
                     io:format("Commands ~p / Bin ~p~n", [length(Commands), byte_size(Bin)]),
                     ok = file:write_file(Filename, Bin),
-                    io:format("s ~p~n", [now()]),
+                    io:format("x consult ~p~n", [now()]),
                     {ok, Terms} = file_consult(Filename),
                     {ok, Tree} = wrangler_consult:consult(Filename),
+                    io:format("x run ~p~n", [now()]),
                     {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
                     SimpleTermsOut0 = simple_ejabberd_cfg_editor:run_commands(Commands, Terms),
-                    io:format("e ~p~n", [now()]),
+                    io:format("x reconsult ~p~n", [now()]),
                     %% okey, we can compare SimpleTermsOut0 with TermsOut. Oh, no. unicode.
                     %% file:consult/1 returns code points in r17
                     %% but bytes in r13. So lets write it and read again.
                     {ok, SimpleTermsOut} = terms_reconsult(SimpleTermsOut0),
+                    io:format("x write ~p~n", [now()]),
                     ok = wrangler_consult:write_file(Filename, FilenameOut, Tree2),
+                    io:format("x file_consult ~p~n", [now()]),
                     {ok, TermsOut} = file_consult(FilenameOut),
+                    io:format("E ~p~n~n~n", [now()]),
                     ?WHENFAIL((catch io:format("Result file:~n~ts~nSimpleTermsOut:~n~p~nTermsOut:~n~p~n",
                                                [element(2, file:read_file(FilenameOut)), SimpleTermsOut, TermsOut])),
                               equals(SimpleTermsOut, TermsOut))

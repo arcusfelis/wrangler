@@ -182,7 +182,7 @@
 	 set_name/2, set_pos/2, set_postcomments/2,
 	 set_precomments/2, size_qualifier/2,
 	 size_qualifier_argument/1, size_qualifier_body/1,
-	 string/1, string_literal/1, string_value/1, subtrees/1,
+	 string/1, string_literal/1, string_value/1, string_concrete/1, subtrees/1,
 	 text/1, text_string/1, tree/1, tree/2, try_after_expr/2,
 	 try_expr/2, try_expr/3, try_expr/4, try_expr_after/1,
 	 try_expr_body/1, try_expr_clauses/1,
@@ -1633,20 +1633,31 @@ is_string(Node, Value) ->
 %% @spec string_value(syntaxTree()) -> string()
 %%
 %% @doc Returns the value represented by a <code>string</code> node.
+%%      The value is not a real term, but text representation.
+%%      The value is all characters between double quotes.
 %%
 %% @see string/1
+%% @see string_concrete/1
 
 string_value(Node) ->
-    string_unescaped(Node).
+    string_escaped(Node).
 
-string_unescaped(Node) ->
-    unescape_string(string_escaped(Node)).
-
+%% Return without any processing
 string_escaped(Node) ->
     case unwrap(Node) of
       {string, _, List} -> List;
       Node1 -> data(Node1)
     end.
+
+%% @spec string_concrete(syntaxTree()) -> string()
+%% @doc Returns string as a term
+%%
+%% erl_syntax:string_value/1 returns the same result
+string_concrete(Node) ->
+    string_unescaped(Node).
+
+string_unescaped(Node) ->
+    unescape_string(string_escaped(Node)).
 
 unescape_string([$\\,H|T]) ->
     [wrangler_scan:escape_char(H)|unescape_string(T)];
@@ -6011,7 +6022,7 @@ concrete1(Node) ->
       integer -> integer_value(Node);
       float -> float_value(Node);
       char -> char_value(Node);
-      string -> string_value(Node);
+      string -> string_concrete(Node);
       nil -> [];
       list ->
 	  [concrete(list_head(Node)) | concrete(list_tail(Node))];

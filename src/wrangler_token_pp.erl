@@ -15,8 +15,7 @@ erase_matched(MatchAST, AnnAST, FileFormat, TabWidth) ->
     {MatchS, MatchE} = get_range(MatchAST),
     SP = get_syntax_path(MatchAST),
     %% Get tokens
-    Str = ast_to_string(FileFormat, AnnAST, TabWidth),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, AnnAST, TabWidth),
     {BeforeToks, _MatchedToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
     Toks1 = fix_and_join_toks(SP, BeforeToks, AfterToks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
@@ -44,11 +43,19 @@ replace_matched_tokens(MatchAST, AnnAST, NewValueToks, FileFormat, TabWidth) ->
     %% Get range to erase
     {MatchS, MatchE} = get_range(MatchAST),
     %% Get tokens
-    Str = ast_to_string(FileFormat, AnnAST, TabWidth),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, AnnAST, TabWidth),
     {BeforeToks, _MatchedToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
     Toks1 = BeforeToks ++ NewValueToks ++ AfterToks,
     tokens_to_ast(Toks1, TabWidth, FileFormat).
+
+ast_to_tokens(FileFormat, AnnAST, TabWidth) ->
+%    Toks = wrangler_misc:get_toks(AnnAST),
+%    ast_to_tokens_2(FileFormat, AnnAST, TabWidth, Toks).
+%
+%ast_to_tokens_2(FileFormat, AnnAST, TabWidth, []) ->
+    Str = ast_to_string(FileFormat, AnnAST, TabWidth),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks.
 
 %% MatchAST = a, AnnAST = [a,b,c], Type = list_prefix, BeforeToks = "[", AfterToks = ",b,c]"
 fix_and_join_toks(list_prefix, BeforeToks, AfterToks) ->
@@ -173,8 +180,7 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
     %% Get range to erase
     {_MatchS, MatchE} = get_range(ListTree),
     %% Get tokens
-    Str = ast_to_string(FileFormat, Tree, TabWidth),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, Tree, TabWidth),
     Toks1 = insert_tokens_before(MatchE, ElemValueToks, Toks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
 
@@ -185,8 +191,7 @@ append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth,
 add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileFormat, TabWidth, ListTreeElems) ->
     {PrevS,PrevE} = get_range(PrevElem),
     %% Get tokens
-    Str = ast_to_string(FileFormat, Tree, TabWidth),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, Tree, TabWidth),
     %% If we have left comment, that we assume that this comment is for
     %% the last argument of the list.
     %% We don't care about multiline comments in the case
@@ -373,7 +378,10 @@ iolist_to_list(X) ->
     erlang:binary_to_list(erlang:iolist_to_binary(X)).
 
 ast_to_string(FileFormat, Tree, TabWidth) ->
-    iolist_to_list(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)).
+    io:format("s ast_to_string ~p~n", [now()]),
+    X = iolist_to_list(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
+    io:format("e ast_to_string ~p~n", [now()]),
+    X.
 
 toks_to_binary(Toks) ->
     erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)).
