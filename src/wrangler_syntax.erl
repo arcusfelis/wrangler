@@ -190,7 +190,8 @@
 	 tuple_size/1, type/1, underscore/0, update_tree/2,
 	 variable/1, variable_literal/1, variable_name/1,
 	 warning_marker/1, warning_marker_info/1,
-	 default_literals_vars/2, empty_node/0]).
+	 default_literals_vars/2, empty_node/0,
+     update_ann/2]).
 	
 %% =====================================================================
 %% IMPLEMENTATION NOTES:
@@ -5994,8 +5995,17 @@ abstract_tail(H, T) -> cons(abstract(H), abstract(T)).
 %% @see abstract/1
 %% @see is_literal/1
 %% @see char/1
-
 concrete(Node) ->
+    case proplists:get_value(overwrite_concrete, get_ann(Node)) of
+        undefined ->
+            concrete1(Node);
+        {value, Value} ->
+            Value;
+        {error, Error} ->
+            erlang:error(Error)
+    end.
+
+concrete1(Node) ->
     case type(Node) of
       atom -> atom_value(Node);
       integer -> integer_value(Node);

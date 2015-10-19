@@ -7,7 +7,8 @@
          flatmap_values_with_path/2,
          flatmap_values_with_path_values/2,
          flatfoldmap_values_with_path_values/3,
-         fold_values_with_path_values/3]).
+         fold_values_with_path_values/3,
+         overwrite_concretes/1]).
 
 %% debug/tests
 -export([tree_to_term/1,
@@ -200,3 +201,15 @@ string_parse(S) ->
 
 iolist_to_list(X) ->
     erlang:binary_to_list(erlang:iolist_to_binary(X)).
+
+
+overwrite_concretes(Tree) ->
+    F = fun(Node, _) ->
+                try
+                    Value = wrangler_syntax:concrete(Node),
+                    wrangler_syntax:update_ann({overwrite_concrete, {value,Value}},Node)
+                catch Class:Reason ->
+                    wrangler_syntax:update_ann({overwrite_concrete, {error, {Class,Reason}}},Node)
+                end
+        end,
+    api_ast_traverse:full_buTP(F, Tree, []).
