@@ -20,10 +20,36 @@ consult(Filename) ->
     TabWidth = 4,
     {ok, Bin} = file:read_file(Filename),
     Str = erlang:binary_to_list(Bin),
-    Str2 = string_to_consult(Str, TabWidth, FileFormat),
+    Bin2 = string_to_consult(Str, TabWidth, FileFormat),
+    Str2 = erlang:binary_to_list(Bin2),
     string_to_ast(Str2, TabWidth, FileFormat).
 
 string_to_ast(Str, TabWidth, FileFormat) ->
+    {ok, Toks, _} = wrangler_scan:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks1 = [Tok || Tok <- Toks, not is_comment_or_whitespace(Tok)],
+    io:format(user, "Toks ~p~n", [Toks]),
+    {ok, Form} = wrangler_parse:parse(Toks),
+    Forms = [Form],
+    SyntaxTree = wrangler_recomment:recomment_forms(Forms, []),
+    AnnAst = annotate_bindings(Str, SyntaxTree, TabWidth, FileFormat),
+    {ok, AnnAst}.
+
+annotate_bindings(Str, AST, TabWidth, FileFormat) ->
+    Info = wrangler_syntax_lib:analyze_forms(AST),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Ann = wrangler_ast_server:add_token_and_ranges(AST, Toks),
+    AnnAST0 = wrangler_syntax_lib:annotate_bindings(Ann, ordsets:new()),
+    Comments = wrangler_comment_scan:string(Str),
+    AnnAST1 = wrangler_recomment:recomment_forms(AnnAST0, Comments),
+    AnnAST2 = wrangler_ast_server:update_toks(Toks,AnnAST1),
+    wrangler_annotate_ast:add_fun_define_locations(AnnAST2, Info).
+
+is_comment_or_whitespace({whitespace,_,_}) -> true;
+is_comment_or_whitespace({comment,_,_}) -> true;
+is_comment_or_whitespace(_) -> false.
+
+
+string_to_ast1(Str, TabWidth, FileFormat) ->
     with_tmpfile(fun(TmpFilename) ->
         ok = file:write_file(TmpFilename, Str),
         {ok, {AnnAST,_Info}} =
@@ -129,6 +155,7 @@ get_delimitor(FileFormat) ->
 
 %% Replaces dots on the top level only
 replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
+    io:format(user, "replace_commas_with_dots ~p~n", [Bin]),
     Str = binary_to_list(Bin),
     %% Get actual AST
     {ok, AnnAST} = string_to_ast(Str, TabWidth, FileFormat),

@@ -44,6 +44,10 @@
 %% API
 -export([start_ast_server/0, update_ast/2, add_range/2]).
 
+%% For wrangler_consult
+-export([update_toks/2,
+         add_token_and_ranges/2]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
@@ -398,7 +402,6 @@ annotate_bindings(FName, AST, Info, Ms, TabWidth) ->
     AnnAST2 =update_toks(Toks,AnnAST1),
     wrangler_annotate_ast:add_fun_define_locations(AnnAST2, Info).
 
-  
 %% Attach tokens to each form in the AST, and also add 
 %% range information to each node in the AST.
 %%-spec add_tokens(syntaxTree(), [token()]) -> syntaxTree(). 		 
@@ -438,17 +441,18 @@ do_add_token_and_ranges(Toks, _Forms=[F| Fs], NewFs) ->
     do_add_token_and_ranges(RemToks, Fs, [F2| NewFs]).
 
 get_form_tokens(Toks, F, Fs) ->
+    IsStandalone = Fs =:= [],
     case wrangler_syntax:type(F) of
 	comment ->
-	    get_comment_form_toks(Toks, F, Fs);
+	    get_comment_form_toks(Toks, F, IsStandalone);
 	_ ->
-	    get_non_comment_form_toks(Toks, F, Fs) 
+	    get_non_comment_form_toks(Toks, F, IsStandalone) 
     end.
 
 %% stand-alone comments.
-get_comment_form_toks(Toks, _F, Fs) when Fs==[] ->
+get_comment_form_toks(Toks, _F, _IsStandalone=true) ->
     {Toks,[]};
-get_comment_form_toks(Toks, F, _Fs) ->
+get_comment_form_toks(Toks, F, false) ->
     StartPos =start_pos(F),
     {Ts1,Ts2} = lists:splitwith(
 		  fun(T) ->
@@ -460,9 +464,9 @@ get_comment_form_toks(Toks, F, _Fs) ->
 				   end, Ts2),
     {Ts1++Ts21, Ts22}.
  
-get_non_comment_form_toks(Toks, _F, Fs) when Fs==[] ->
+get_non_comment_form_toks(Toks, _F, _IsStandalone=true) ->
     {Toks, []};
-get_non_comment_form_toks(Toks, F, _Fs) ->
+get_non_comment_form_toks(Toks, F, false) ->
     StartPos = start_pos(F),
     {Ts1, Ts2} = lists:splitwith(
 		   fun(T) ->
