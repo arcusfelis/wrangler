@@ -10,6 +10,8 @@
 -export([string_to_consult/3,
          string_to_ast/3]).
 
+-export([assert_tree_without_errors/2]).
+
 string_to_consult(Str, TabWidth, FileFormat) ->
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     Exprs = replace_dots_with_comma_keep_last(Toks),
@@ -26,12 +28,12 @@ consult(Filename) ->
 
 string_to_ast(Str, TabWidth, FileFormat) ->
     {ok, Toks, _} = wrangler_scan:string(Str, {1,1}, TabWidth, FileFormat),
-    Toks1 = [Tok || Tok <- Toks, not is_comment_or_whitespace(Tok)],
-    io:format(user, "Toks ~p~n", [Toks]),
     {ok, Form} = wrangler_parse:parse(Toks),
+    assert_tree_without_errors(Form, {string_to_ast, wrangler_parse}),
     Forms = [Form],
     SyntaxTree = wrangler_recomment:recomment_forms(Forms, []),
     AnnAst = annotate_bindings(Str, SyntaxTree, TabWidth, FileFormat),
+    assert_tree_without_errors(AnnAst, {string_to_ast, annotate_bindings}),
     {ok, AnnAst}.
 
 annotate_bindings(Str, AST, TabWidth, FileFormat) ->
@@ -42,7 +44,7 @@ annotate_bindings(Str, AST, TabWidth, FileFormat) ->
     Comments = wrangler_comment_scan:string(Str),
     AnnAST1 = wrangler_recomment:recomment_forms(AnnAST0, Comments),
     AnnAST2 = wrangler_ast_server:update_toks(Toks,AnnAST1),
-    wrangler_annotate_ast:add_fun_define_locations(AnnAST2, Info).
+    AnnAST3 = wrangler_annotate_ast:add_fun_define_locations(AnnAST2, Info).
 
 is_comment_or_whitespace({whitespace,_,_}) -> true;
 is_comment_or_whitespace({comment,_,_}) -> true;
@@ -101,6 +103,7 @@ write_file(FilenameOrig, AnnAST) ->
     write_file(FilenameOrig, FileNameOut, AnnAST).
 
 write_file(FilenameOrig, FileNameOut, AnnAST) ->
+    assert_tree_without_errors(AnnAST, {write_file, bad_input}),
     TabWidth = 4,
     FileFormat = wrangler_misc:file_format(FilenameOrig),
     Bin = list_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
@@ -108,14 +111,27 @@ write_file(FilenameOrig, FileNameOut, AnnAST) ->
     Bin3 = remove_consult(Bin2),
     file:write_file(FileNameOut, Bin3).
 
-remove_consult(<<"consult()->",Bin/binary>>) -> Bin;
-%% something is wrong, it was prettyprinted
-remove_consult(<<"\r\n\r\nconsult() -> ",Bin/binary>>) -> Bin;
-remove_consult(<<"\r\rconsult() -> ",Bin/binary>>) -> Bin;
-remove_consult(<<"\n\nconsult() -> ",Bin/binary>>) -> Bin;
-remove_consult(<<"\r\n\r\nconsult() ->\n",Bin/binary>>) -> Bin;
-remove_consult(<<"\r\rconsult() ->\n",Bin/binary>>) -> Bin;
-remove_consult(<<"\n\nconsult() ->\n",Bin/binary>>) -> Bin.
+remove_consult(Bin) ->
+    Bin1 = remove_whitespace(Bin),
+    Bin2 = remoce_consult_fun(Bin1),
+    Bin3 = remove_whitespace(Bin2),
+    Bin4 = remove_arrow(Bin3),
+    remove_whitespace(Bin4).
+
+remove_whitespace(<<" ", T/binary>>) ->
+    remove_whitespace(T);
+remove_whitespace(<<"\r", T/binary>>) ->
+    remove_whitespace(T);
+remove_whitespace(<<"\n", T/binary>>) ->
+    remove_whitespace(T);
+remove_whitespace(T) ->
+    T.
+
+remoce_consult_fun(<<"consult()", T/binary>>) ->
+    T.
+
+remove_arrow(<<"->", T/binary>>) ->
+    T.
 
 tmp_filename() ->
     string:strip(os:cmd("mktemp"), right, $\n).
@@ -155,13 +171,12 @@ get_delimitor(FileFormat) ->
 
 %% Replaces dots on the top level only
 replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
-    io:format(user, "replace_commas_with_dots ~p~n", [Bin]),
     Str = binary_to_list(Bin),
     %% Get actual AST
     {ok, AnnAST} = string_to_ast(Str, TabWidth, FileFormat),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    io:format(user, "Node types ~p~n", [[wrangler_syntax:type(Node)
-                                         || Node <- wrangler_syntax:form_list_elements(AnnAST)]]),
+%   io:format(user, "Node types ~p~n", [[wrangler_syntax:type(Node)
+%                                        || Node <- wrangler_syntax:form_list_elements(AnnAST)]]),
     FunAST = hd([Node || Node <- wrangler_syntax:form_list_elements(AnnAST),
                          lists:member(wrangler_syntax:type(Node), [function,eof_marker])]),
     ClauseAST = hd(wrangler_syntax:function_clauses(FunAST)),
@@ -232,4 +247,20 @@ with_tmpfile(F) ->
         F(Filename)
     after
         file:delete(Filename)
+    end.
+
+assert_tree_without_errors(Tree, Meta) ->
+    Errors = api_ast_traverse:fold(fun(T, Errors) ->
+            case wrangler_syntax:type(T) of
+                error_marker ->
+                    [T|Errors];
+                _ ->
+                    Errors
+            end
+        end, [], Tree),
+    case Errors of
+        [] -> ok;
+        [_|_] ->
+            [io:format(user, "assert_tree_without_errors ~p~n", [E]) || E <- Errors],
+            erlang:error({assert_tree_without_errors, Meta})
     end.

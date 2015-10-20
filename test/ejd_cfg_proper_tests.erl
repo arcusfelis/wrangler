@@ -48,7 +48,7 @@ tree_to_binary(Bin, Tree) ->
                     with_tmpfile(fun(FilenameOut) ->
                         ok = file:write_file(Filename, Bin),
                         ok = wrangler_consult:write_file(Filename, FilenameOut, Tree),
-                        {ok, BinWritten} = file:read_file(Filename),
+                        {ok, BinWritten} = file:read_file(FilenameOut),
                         BinWritten
                     end)
                 end).
@@ -75,7 +75,7 @@ config_binary3() ->
       "            % does\n"
       "            % does\n"
       ".\n"
-      "{modules,[{mod_odbc,[]}]}.">>.
+      "{modules,[{mod_odbc, []}]}.">>.
 
 config_binary4() ->
     <<"{loglevel,1}.\n"
@@ -84,7 +84,8 @@ config_binary4() ->
       "            % does\n"
       "            % does\n"
       ".\n"
-      "{modules,[{mod_odbc,[]},{mod_odbc_mysql,[]}]}.">>.
+      "{modules,[{mod_odbc, []},\n"
+      "          {mod_odbc_mysql, []}]}.">>.
 
 consult_binary4() ->
     <<"consult()->\n"
@@ -111,25 +112,27 @@ write_config2_test() ->
     Bin = config_binary2(),
     {ok, Tree} = wrangler_consult:consult_string(Bin),
     BinOut = tree_to_binary(Bin, Tree),
-    io:format("Old ~p~nNew ~p~n", [Bin, BinOut]),
+    io:format("~nOld ~p~nNew ~p~n", [Bin, BinOut]),
     ?assertEqual(Bin, BinOut).
 
 add_module_after_x_x_test() ->
     Bin = config_binary1(),
-    Commands = [{add_module_after,mod_odbc_mysql,mod_odbc_mysql}],
+    Commands = [{add_module_after,mod_test,mod_test}],
     {ok, Tree} = wrangler_consult:consult_string(Bin),
     {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
     BinOut = tree_to_binary(Bin, Tree2),
+    io:format("~nBinOut   ~p~nExpected ~p~n", [BinOut, Bin]),
     ?assertEqual(Bin, BinOut).
 
 add_module_test() ->
     Bin = config_binary2(),
     Commands = [{add_module,mod_odbc}],
     {ok, Tree} = wrangler_consult:consult_string(Bin),
-    {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
+    {ok, Tree2, Result} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
+    io:format("Result ~p~n", [Result]),
     BinOut = tree_to_binary(Bin, Tree2),
     Expected = config_binary3(),
-    io:format(user, "BinOut ~p~nExpected ~p~n", [BinOut, Expected]),
+    io:format("~nBinOut   ~p~nExpected ~p~n", [BinOut, Expected]),
     ?assertEqual(Expected, BinOut).
 
 add_two_modules_test() ->
@@ -139,6 +142,7 @@ add_two_modules_test() ->
     {ok, Tree2, _} = ejabberd_cfg_editor:run_commands(Commands, Tree, unix, 4),
     BinOut = tree_to_binary(Bin, Tree2),
     Expected = config_binary4(),
+    io:format("~nBinOut   ~p~nExpected ~p~n", [BinOut, Expected]),
     ?assertEqual(Expected, BinOut).
 
 string_to_binary_tree(S) ->

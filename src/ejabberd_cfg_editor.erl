@@ -7,12 +7,14 @@
          unset_option/5]).
 
 run_commands(Commands, Tree, FileFormat, TabWidth) ->
+    wrangler_consult:assert_tree_without_errors(Tree, {run_commands, input}),
     run_commands(Commands, Tree, FileFormat, TabWidth, []).
 
 
 run_commands([Command|Commands], Tree, FileFormat, TabWidth, Results) ->
     io:format("s run_commands ~p~n", [Command]),
     {ok, Tree2, Res} = run_command(Command, Tree, FileFormat, TabWidth),
+    wrangler_consult:assert_tree_without_errors(Tree2, {run_command, Command}),
     io:format("e run_commands ~p~n", [Command]),
     run_commands(Commands, Tree2, FileFormat, TabWidth, [Res|Results]);
 run_commands([], Tree, _FileFormat, _TabWidth, Results) ->

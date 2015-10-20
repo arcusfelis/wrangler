@@ -23,14 +23,9 @@ erase_matched(MatchAST, AnnAST, FileFormat, TabWidth) ->
 tokens_to_ast(Toks, TabWidth, FileFormat) ->
     %% Convert result tokens back to ast
     Bin = toks_to_binary(Toks),
-    TmpFilename = tmp_filename(),
-    ok = file:write_file(TmpFilename, Bin),
-    {ok, {AnnAST1,_Info}} = try
-            wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
-        after
-            ok = file:delete(TmpFilename)
-        end,
-    AnnAST1.
+    Str = erlang:binary_to_list(Bin),
+    {ok, AnnAST} = wrangler_consult:string_to_ast(Str, TabWidth, FileFormat),
+    AnnAST.
 
 %% Search for `MatchAST' in `AnnAST' and replace it with `NewValue'.
 %% NewValue is term, not form or tree.
@@ -141,9 +136,6 @@ partition_by_location(Loc, [Tok|Toks], Acc) ->
             {lists:reverse(Acc), [], [Tok|Toks]}
     end.
 
-tmp_filename() ->
-    string:strip(os:cmd("mktemp"), right, $\n).
-
 term_to_tokens(Value, TabWidth, FileFormat) ->
     Str = pretty_print_term(Value),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
@@ -204,7 +196,6 @@ add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileForm
             ++ ElemValueToks,
     Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
     tokens_to_ast(Toks2, TabWidth, FileFormat).
-
 
 indent_new_elem(LastS, Toks, TabWidth) ->
     %% Tokens that separate last element from something before
