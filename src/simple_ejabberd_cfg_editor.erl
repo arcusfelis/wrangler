@@ -59,11 +59,127 @@ run_command({unset_option, M, K}, C) ->
                 false ->
                     C
            end
+    end;
+run_command({add_listener, P, M}, C) ->
+    add_listener(P, M, C);
+run_command({add_listener_after, P, M, AP, AM}, C) ->
+    add_listener_after(P, M, AP, AM, C);
+run_command({delete_listener, P, M}, C) ->
+    delete_listener(P, M, C);
+run_command({set_listener_option, P, M, K, V}, C) ->
+    set_listener_option(P, M, K, V, C);
+run_command({unset_listener_option, P, M, K}, C) ->
+    unset_listener_option(P, M, K, C).
+
+
+add_listener(P, M, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        true -> C;
+        false ->
+            Listeners2 = Listeners ++ [{P, M, []}],
+            lists:keyreplace(listen, 1, C, {listen, Listeners2})
     end.
+
+add_listener_after(P, M, AP, AM, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        true -> C;
+        false ->
+            Listeners2 = keyaddafter2(AP, AM, 1, 2, Listeners, {P, M, []}),
+            lists:keyreplace(listen, 1, C, {listen, Listeners2})
+    end.
+
+delete_listener(P, M, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        false -> C;
+        true ->
+            Listeners2 = keydelete2(P, M, 1, 2, Listeners),
+            lists:keyreplace(listen, 1, C, {listen, Listeners2})
+    end.
+
+set_listener_option(P, M, K, V, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        false -> C;
+        true ->
+            Opts = get_value2(P, M, Listeners),
+            case lists:keymember(K, 1, Opts) of
+                true ->
+                    Opts2 = lists:keyreplace(K, 1, Opts, {K,V}),
+                    Listeners2 = keyreplace2(P, M, 1, 2, Listeners, {P, M, Opts2}),
+                    lists:keyreplace(listen, 1, C, {listen, Listeners2});
+                false ->
+                    Opts2 = Opts ++ [{K,V}], %% append new listener_option
+                    Listeners2 = keyreplace2(P, M, 1, 2, Listeners, {P, M, Opts2}),
+                    lists:keyreplace(listen, 1, C, {listen, Listeners2})
+            end
+    end.
+
+unset_listener_option(P, M, K, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        false -> C;
+        true ->
+            Opts = get_value2(P, M, Listeners),
+            case lists:keymember(K, 1, Opts) of
+                true ->
+                    Opts2 = lists:keydelete(K, 1, Opts),
+                    Listeners2 = keyreplace2(P, M, 1, 2, Listeners, {P, M, Opts2}),
+                    lists:keyreplace(listen, 1, C, {listen, Listeners2});
+                false ->
+                    C
+           end
+    end.
+
+
+
+%% keysomething2/? functions copied from arcusfelis/lists2
+
+%% @doc `lists:keymember/3' for two elements
+keymember2(A, B, N, M, [H|T]) when element(N, H) =:= A, element(M, H) =:= B ->
+    true;
+keymember2(A, B, N, M, [_|T]) ->
+    keymember2(A, B, N, M, T);
+keymember2(_, _, _, _, []) ->
+    false.
+
+%% @doc `lists:keydelete/3' for two elements
+keydelete2(A, B, N, M, [H|T]) when element(N, H) =:= A, element(M, H) =:= B ->
+    T;
+keydelete2(A, B, N, M, [H|T]) ->
+    [H|keydelete2(A, B, N, M, T)];
+keydelete2(_, _, _, _, []) ->
+    [].
+
+%% @doc `lists:keyreplace/4' for two elements
+keyreplace2(A, B, N, M, [H|T], New) when element(N, H) =:= A, element(M, H) =:= B ->
+    [New|T];
+keyreplace2(A, B, N, M, [H|T], New) ->
+    [H|keyreplace2(A, B, N, M, T, New)];
+keyreplace2(_, _, _, _, [], _) ->
+    [].
+
+%% @doc `proplists:get_value/2' for two keys
+get_value2(A, B, [{A,B,V}|_]) ->
+    V;
+get_value2(A, B, [_|T]) ->
+    get_value2(A, B, T);
+get_value2(_, _, []) ->
+    undefined.
+
 
 keyaddafter(V, N, [H|T], NewTuple) when element(N, H) =:= V ->
     [H,NewTuple|T];
 keyaddafter(V, N, [H|T], NewTuple) ->
     [H|keyaddafter(V, N, T, NewTuple)];
 keyaddafter(_,_, [], NewTuple) ->
+    [NewTuple]. % not found, insert at the end
+
+keyaddafter2(A, B, N, M, [H|T], NewTuple) when element(N, H) =:= A, element(M, H) =:= B ->
+    [H,NewTuple|T];
+keyaddafter2(A, B, N, M, [H|T], NewTuple) ->
+    [H|keyaddafter2(A, B, N, M, T, NewTuple)];
+keyaddafter2(_,_,_,_, [], NewTuple) ->
     [NewTuple]. % not found, insert at the end

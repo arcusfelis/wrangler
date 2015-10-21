@@ -422,7 +422,13 @@ command() ->
            {add_module_after, module_module(), module_module()},
            {delete_module, module_module()},
            {set_option, module_module(), readable_key(), readable_value()},
-           {unset_option, module_module(), readable_key()}]).
+           {unset_option, module_module(), readable_key()},
+          
+           {add_listener, inet_port(), listen_module()},
+           {add_listener_after, inet_port(), listen_module(), inet_port(), listen_module()},
+           {delete_listener, inet_port(), listen_module()},
+           {set_listener_option, inet_port(), listen_module(), readable_key(), readable_value()},
+           {unset_listener_option, inet_port(), listen_module(), readable_key()}]).
 
 %% Spread comments across tokens
 to_binary_with_random_comments(Terms, Comments) ->
