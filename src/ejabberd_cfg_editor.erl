@@ -9,7 +9,9 @@
          set_option/6,
          unset_option/5,
          set_listener_option/7,
-         unset_listener_option/6]).
+         unset_listener_option/6,
+         add_listener_element/6,
+         delete_listener_element/6]).
 
 run_commands(Commands, Tree, FileFormat, TabWidth) ->
     wrangler_consult:assert_tree_without_errors(Tree, {run_commands, input}),
@@ -44,7 +46,11 @@ run_command({unset_option, Module, OptKey}, Tree, FileFormat, TabWidth) ->
 run_command({set_listener_option, Port, Module, OptKey, OptValue}, Tree, FileFormat, TabWidth) ->
     set_listener_option(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth);
 run_command({unset_listener_option, Port, Module, OptKey}, Tree, FileFormat, TabWidth) ->
-    unset_listener_option(Port, Module, OptKey, Tree, FileFormat, TabWidth).
+    unset_listener_option(Port, Module, OptKey, Tree, FileFormat, TabWidth);
+run_command({add_listener_element, Port, Module, Element}, Tree, FileFormat, TabWidth) ->
+    add_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth);
+run_command({delete_listener_element, Port, Module, Element}, Tree, FileFormat, TabWidth) ->
+    delete_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth).
 
 
 add_module_after(Module, AfterModule, Tree, FileFormat, TabWidth)
@@ -303,7 +309,7 @@ set_listener_option_2(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth
 %% Module is defined, but listener_option is not
 set_listener_option_3(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth, OptsTree, []) ->
 %% Module is defined, listener_option is defined too, but it's value is the same
-    add_listener_option(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth, OptsTree);
+    append_listener_option(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth, OptsTree);
 
 %% Compare OptValue
 set_listener_option_3(_Port, _Module, _OptKey, OptValue, Tree, _FileFormat, _TabWidth, _OptsTree, [{tree_value,_ValueT,OptValue}]) ->
@@ -318,13 +324,56 @@ replace_listener_option(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWid
     NewTree = wrangler_token_pp:replace_matched(ValueT, Tree, OptValue, FileFormat, TabWidth),
     {ok, NewTree, listener_option_value_replaced}.
 
-add_listener_option(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth, OptsTree) ->
+append_listener_option(Port, Module, OptKey, OptValue, Tree, FileFormat, TabWidth, OptsTree) ->
     %% OptsTree is list, Tree is the whole list
     NewElem = {OptKey, OptValue},
     NewTree = wrangler_token_pp:append_list_element(OptsTree, Tree, NewElem, FileFormat, TabWidth),
     {ok, NewTree, listener_option_value_added}.
 
 
+%% Add listener_option
+%% Do nothing if module does not exists
+%% Returns {ok, NewTree, ResultComment}
+%% ResultComment describes which actions were made
+%% Element is term, not tree
+%% Used for options like starttls, that have no value.
+%% Module is atom
+%%
+%% Use delete_listener_element/6 to undo this operation
+add_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth)
+    when is_integer(Port), is_atom(Module), is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 = api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    Acc = match_listener_element(Port, Module, Element, Tree2),
+    OptsAcc = match_listener_options(Port, Module, Tree2),
+    add_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth, Acc, OptsAcc).
+
+add_listener_element(_Port, _Module, _Element, Tree, _FileFormat, _TabWidth, [_|_], _OptsTree) ->
+    {ok, Tree, listener_element_already_added};
+add_listener_element(_Port, _Module, _Element, Tree, _FileFormat, _TabWidth, [], []) ->
+    {ok, Tree, listener_is_missing};
+add_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth, [], [OptsTree]) ->
+    NewTree = wrangler_token_pp:append_list_element(OptsTree, Tree, Element, FileFormat, TabWidth),
+    {ok, NewTree, listener_element_added}.
+
+delete_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth)
+    when is_integer(Port), is_atom(Module), is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 = api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    Acc = match_listener_element(Port, Module, Element, Tree2),
+    delete_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth, Acc).
+
+delete_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth, [_|_]=Acc) ->
+    NewTree = fold_erase_matched(Acc, Tree, FileFormat, TabWidth),
+    {ok, NewTree, listener_element_deleted};
+delete_listener_element(_Port, _Module, _Element, Tree, _FileFormat, _TabWidth, []) ->
+    {ok, Tree, listener_element_is_missing}.
+
+fold_erase_matched([H|T], Tree, FileFormat, TabWidth) ->
+    NewTree = wrangler_token_pp:erase_matched(H, Tree, FileFormat, TabWidth),
+    fold_erase_matched(T, NewTree, FileFormat, TabWidth);
+fold_erase_matched([], Tree, _FileFormat, _TabWidth) ->
+    Tree.
 
 match_modules(Tree) ->
     MatchModsF = fun(T, Mods, [{{modules,_}, _}], A) when is_list(Mods) -> [T|A];
@@ -360,14 +409,14 @@ match_option(Module, OptKey, Tree) ->
     MatchOptF = fun(T,{K,_},[{Opts,_},{{M,_},_},{AllModules,_},{{modules,AllModules},_}], A)
                         when M =:= Module, is_list(Opts), K =:= OptKey -> [T|A];
                     (_,_,_, A) -> A end,
-    Acc = api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree).
+    api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree).
 
 %% Find Options list
 match_options(Module, Tree) ->
     MatchOptsF = fun(T,Opts,[{{M,_},_},{AllListeners,_},{{modules,AllListeners},_}], A)
                         when M =:= Module, is_list(Opts) -> [T|A];
                     (_,_,_, A) -> A end,
-    Acc = api_ast_traverse2:fold_values_with_path_values(MatchOptsF, [], Tree).
+    api_ast_traverse2:fold_values_with_path_values(MatchOptsF, [], Tree).
 
 
 match_listener_option_value(Port, Module, OptKey, OptsTree) ->
@@ -380,11 +429,17 @@ match_listener_option(Port, Module, OptKey, Tree) ->
     MatchOptF = fun(T,{K,_},[{Opts,_},{{P,M,_},_},{AllListeners,_},{{listen,AllListeners},_}], A)
                         when P =:= Port, M =:= Module, is_list(Opts), K =:= OptKey -> [T|A];
                     (_,_,_, A) -> A end,
-    Acc = api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree).
+    api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree).
+
+match_listener_element(Port, Module, Element, Tree) ->
+    MatchElemF = fun(T,E,[{Opts,_},{{P,M,_},_},{AllListeners,_},{{listen,AllListeners},_}], A)
+                        when P =:= Port, M =:= Module, is_list(Opts), E =:= Element -> [T|A];
+                    (_,_,_, A) -> A end,
+    api_ast_traverse2:fold_values_with_path_values(MatchElemF, [], Tree).
 
 %% Find Options list
 match_listener_options(Port, Module, Tree) ->
     MatchOptsF = fun(T,Opts,[{{P,M,_},_},{AllListeners,_},{{listen,AllListeners},_}], A)
                         when P =:= Port, M =:= Module, is_list(Opts) -> [T|A];
                     (_,_,_, A) -> A end,
-    Acc = api_ast_traverse2:fold_values_with_path_values(MatchOptsF, [], Tree).
+    api_ast_traverse2:fold_values_with_path_values(MatchOptsF, [], Tree).

@@ -69,7 +69,11 @@ run_command({delete_listener, P, M}, C) ->
 run_command({set_listener_option, P, M, K, V}, C) ->
     set_listener_option(P, M, K, V, C);
 run_command({unset_listener_option, P, M, K}, C) ->
-    unset_listener_option(P, M, K, C).
+    unset_listener_option(P, M, K, C);
+run_command({add_listener_element, P, M, E}, C) ->
+    add_listener_element(P, M, E, C);
+run_command({delete_listener_element, P, M, E}, C) ->
+    delete_listener_element(P, M, E, C).
 
 
 add_listener(P, M, C) ->
@@ -133,6 +137,37 @@ unset_listener_option(P, M, K, C) ->
            end
     end.
 
+add_listener_element(P, M, E, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        false -> C;
+        true ->
+            Opts = get_value2(P, M, Listeners),
+            case lists:member(E, 1, Opts) of
+                true ->
+                    C;
+                false ->
+                    Opts2 = Opts ++ [E], %% append new element
+                    Listeners2 = keyreplace2(P, M, 1, 2, Listeners, {P, M, Opts2}),
+                    lists:keyreplace(listen, 1, C, {listen, Listeners2})
+            end
+    end.
+
+delete_listener_element(P, M, E, C) ->
+    Listeners = proplists:get_value(listen, C),
+    case keymember2(P, M, 1, 2, Listeners) of
+        false -> C;
+        true ->
+            Opts = get_value2(P, M, Listeners),
+            case lists:member(E, 1, Opts) of
+                true ->
+                    Opts2 = lists:delete(E, Opts),
+                    Listeners2 = keyreplace2(P, M, 1, 2, Listeners, {P, M, Opts2}),
+                    lists:keyreplace(listen, 1, C, {listen, Listeners2});
+                false ->
+                    C
+           end
+    end.
 
 
 %% keysomething2/? functions copied from arcusfelis/lists2
