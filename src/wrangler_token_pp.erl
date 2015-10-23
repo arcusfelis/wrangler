@@ -2,7 +2,13 @@
 -export([erase_matched/4,
          replace_matched/5,
          append_list_element/5,
-         insert_another_list_element_after/6]).
+         insert_another_list_element_after/6,
+         append_expr/4]).
+
+-export([get_delimiter_forms/1]).
+
+%% Debug
+-export([sub_exprs/1]).
 
 %% Search for `MatchAST' in `AnnAST' to delete it.
 %% FileFormat = wrangler_misc:file_format(Filename)
@@ -13,24 +19,17 @@ erase_matched(MatchAST, AnnAST, FileFormat, TabWidth) ->
     {MatchS, MatchE} = get_range(MatchAST),
     SP = get_syntax_path(MatchAST),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, AnnAST, TabWidth),
     {BeforeToks, _MatchedToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
     Toks1 = fix_and_join_toks(SP, BeforeToks, AfterToks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
 
 tokens_to_ast(Toks, TabWidth, FileFormat) ->
     %% Convert result tokens back to ast
-    Bin = erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)),
-    TmpFilename = tmp_filenate(),
-    ok = file:write_file(TmpFilename, Bin),
-    {ok, {AnnAST1,_Info}} = try
-            wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
-        after
-            ok = file:delete(TmpFilename)
-        end,
-    AnnAST1.
+    Bin = toks_to_binary(Toks),
+    Str = erlang:binary_to_list(Bin),
+    {ok, AnnAST} = wrangler_consult:string_to_ast(Str, TabWidth, FileFormat),
+    AnnAST.
 
 %% Search for `MatchAST' in `AnnAST' and replace it with `NewValue'.
 %% NewValue is term, not form or tree.
@@ -43,13 +42,21 @@ replace_matched_tokens(MatchAST, AnnAST, NewValueToks, FileFormat, TabWidth) ->
     %% Get range to erase
     {MatchS, MatchE} = get_range(MatchAST),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, AnnAST, TabWidth),
     {BeforeToks, _MatchedToks, AfterToks} = partition_by_range(MatchS, MatchE, Toks),
     Toks1 = BeforeToks ++ NewValueToks ++ AfterToks,
     tokens_to_ast(Toks1, TabWidth, FileFormat).
 
+ast_to_tokens(FileFormat, AnnAST, TabWidth) ->
+%    Toks = wrangler_misc:get_toks(AnnAST),
+%    ast_to_tokens_2(FileFormat, AnnAST, TabWidth, Toks).
+%
+%ast_to_tokens_2(FileFormat, AnnAST, TabWidth, []) ->
+    Str = ast_to_string(FileFormat, AnnAST, TabWidth),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks.
+
+%% Works for lists or expressions
 %% MatchAST = a, AnnAST = [a,b,c], Type = list_prefix, BeforeToks = "[", AfterToks = ",b,c]"
 fix_and_join_toks(list_prefix, BeforeToks, AfterToks) ->
     %% Try to delete next separator
@@ -57,6 +64,16 @@ fix_and_join_toks(list_prefix, BeforeToks, AfterToks) ->
         AfterToks ->
             %% Delete previos separator
             BeforeToks1 = remove_first_list_separator_r(BeforeToks),
+            BeforeToks1 ++ AfterToks;
+        AfterToks1 ->
+            BeforeToks ++ AfterToks1
+    end;
+fix_and_join_toks(body_expr, BeforeToks, AfterToks) ->
+    %% Try to delete next separator
+    case remove_first_expr_separator(AfterToks) of
+        AfterToks ->
+            %% Delete previos separator
+            BeforeToks1 = remove_first_expr_separator_r(BeforeToks),
             BeforeToks1 ++ AfterToks;
         AfterToks1 ->
             BeforeToks ++ AfterToks1
@@ -77,6 +94,22 @@ remove_first_list_separator([{',',_}|Toks]) ->
     Toks;
 remove_first_list_separator([Tok|Toks]) ->
     [Tok|remove_first_list_separator(Toks)].
+
+%% Go backward
+remove_first_expr_separator_r(Toks) ->
+    ToksR = lists:reverse(Toks),
+    ToksR1 = remove_first_expr_separator(ToksR),
+    lists:reverse(ToksR1).
+    
+%% Go forward
+remove_first_expr_separator([{'->',_}|_]=Toks) ->
+    Toks; %% no more list separators, stop
+remove_first_expr_separator([{dot,_}|_]=Toks) ->
+    Toks; %% no more list separators, stop
+remove_first_expr_separator([{',',_}|Toks]) ->
+    Toks;
+remove_first_expr_separator([Tok|Toks]) ->
+    [Tok|remove_first_expr_separator(Toks)].
 
 get_range(Node) ->
      As = wrangler_syntax:get_ann(Node),
@@ -134,9 +167,6 @@ partition_by_location(Loc, [Tok|Toks], Acc) ->
             {lists:reverse(Acc), [], [Tok|Toks]}
     end.
 
-tmp_filenate() ->
-    string:strip(os:cmd("mktemp"), right, $\n).
-
 term_to_tokens(Value, TabWidth, FileFormat) ->
     Str = pretty_print_term(Value),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
@@ -144,15 +174,11 @@ term_to_tokens(Value, TabWidth, FileFormat) ->
 
 %% Pretty-printed `io_lib:format("~p", [Value])'
 pretty_print_term(Value) ->
-    Str = iolist_to_string(io_lib:format("~p.", [Value])),
+    Str = iolist_to_list(io_lib:format("~p.", [Value])),
     {ok,Forms,_} = erl_scan:string(Str),
     {ok,Exprs} = erl_parse:parse_exprs(Forms),
     Result = erl_prettypr:format(hd(Exprs)),
-    iolist_to_string(Result).
-
-iolist_to_string(Io) ->
-    Bin = erlang:iolist_to_binary(Io),
-    erlang:binary_to_list(Bin).
+    iolist_to_list(Result).
 
 %% `ElemValue' is term, not form or tree.
 %% `ListTree' is list, in which value should be inserted.
@@ -177,9 +203,7 @@ append_first_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth) -
     %% Get range to erase
     {_MatchS, MatchE} = get_range(ListTree),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, Tree, TabWidth),
     Toks1 = insert_tokens_before(MatchE, ElemValueToks, Toks),
     tokens_to_ast(Toks1, TabWidth, FileFormat).
 
@@ -190,9 +214,7 @@ append_another_list_element(ListTree, Tree, ElemValueToks, FileFormat, TabWidth,
 add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileFormat, TabWidth, ListTreeElems) ->
     {PrevS,PrevE} = get_range(PrevElem),
     %% Get tokens
-    Bin = erlang:iolist_to_binary(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
-    Str = erlang:binary_to_list(Bin),
-    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Toks = ast_to_tokens(FileFormat, Tree, TabWidth),
     %% If we have left comment, that we assume that this comment is for
     %% the last argument of the list.
     %% We don't care about multiline comments in the case
@@ -200,7 +222,7 @@ add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileForm
     IndentToks = indent_new_elem(PrevS, Toks, TabWidth),
     ElemValueToks1 = [{',', {1,1}}]
             ++ CommentToks
-            ++ get_delimitor_forms(FileFormat)
+            ++ get_delimiter_forms(FileFormat)
             ++ IndentToks
             ++ ElemValueToks,
     Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
@@ -245,11 +267,11 @@ get_whitespaces_between(MatchS, MatchE, Toks) ->
 filter_whitespaces(Toks) ->
     [T||T={whitespace,_,_} <- Toks].
 
-get_delimitor_forms(dos) ->
+get_delimiter_forms(dos) ->
     [{whitespace,{1,1},'\r'}, {whitespace,{1,1},'\n'}];
-get_delimitor_forms(mac) ->
+get_delimiter_forms(mac) ->
     [{whitespace,{1,1},'\r'}];
-get_delimitor_forms(mac) ->
+get_delimiter_forms(unix) ->
     [{whitespace,{1,1},'\n'}].
 
 %% Goes from Loc left skipping all comments or whitespaces
@@ -374,3 +396,46 @@ same_line_tabs_before_loc(Loc, Toks) ->
 
 whitespaces(Len) ->
     lists:duplicate(Len, {whitespace, {1,1}, ' '}).
+
+iolist_to_list(X) ->
+    erlang:binary_to_list(erlang:iolist_to_binary(X)).
+
+ast_to_string(FileFormat, Tree, TabWidth) ->
+    io:format("s ast_to_string ~p~n", [now()]),
+    X = iolist_to_list(wrangler_prettypr:print_ast(FileFormat, Tree, TabWidth)),
+    io:format("e ast_to_string ~p~n", [now()]),
+    X.
+
+toks_to_binary(Toks) ->
+    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)).
+
+
+append_expr(Tree, ElemValue, FileFormat, TabWidth) ->
+    PrevElem = last_expr(Tree),
+    append_expr_after(Tree, ElemValue, PrevElem, FileFormat, TabWidth).
+
+append_expr_after(Tree, ElemValue, PrevElem, FileFormat, TabWidth) ->
+    ElemValueToks = term_to_tokens(ElemValue, TabWidth, FileFormat),
+    {PrevS,PrevE} = get_range(PrevElem),
+    %% Get tokens
+    Toks = ast_to_tokens(FileFormat, Tree, TabWidth),
+    %% If we have left comment, that we assume that this comment is for
+    %% the last argument of the list.
+    %% We don't care about multiline comments in the case
+    {CommentToks, Toks1} = cut_line_comment_and_leading_whitespaces(PrevE, Toks),
+    IndentToks = indent_new_elem(PrevS, Toks, TabWidth),
+    ElemValueToks1 = [{',', {1,1}}]
+            ++ CommentToks
+            ++ get_delimiter_forms(FileFormat)
+            ++ IndentToks
+            ++ ElemValueToks,
+    Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
+    tokens_to_ast(Toks2, TabWidth, FileFormat).
+
+last_expr(Tree) ->
+    lists:last(sub_exprs(Tree)).
+
+sub_exprs(Tree) ->
+    MatchValF = fun(T,_,[], A) -> [T|A]; (_,_,_, A) -> A end,
+    Acc = api_ast_traverse2:fold_values_with_path_values(MatchValF, [], Tree),
+    lists:reverse(Acc).

@@ -1,24 +1,90 @@
 -module(wrangler_consult).
 -export([consult/1,
+         consult_terms/1,
+         consult_string/1,
          write_file/2,
          write_file/3]).
+
+-export([terms_to_tokens/2]).
+
+-export([string_to_consult/3,
+         string_to_ast/3]).
+
+-export([assert_tree_without_errors/2]).
+
+string_to_consult(Str, TabWidth, FileFormat) ->
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    Exprs = replace_dots_with_comma_keep_last(Toks),
+    erlang:iolist_to_binary("consult()->\n" ++ toks_to_binary(Exprs)).
 
 consult(Filename) ->
     FileFormat = wrangler_misc:file_format(Filename),
     TabWidth = 4,
     {ok, Bin} = file:read_file(Filename),
     Str = erlang:binary_to_list(Bin),
+    Bin2 = string_to_consult(Str, TabWidth, FileFormat),
+    Str2 = erlang:binary_to_list(Bin2),
+    string_to_ast(Str2, TabWidth, FileFormat).
+
+string_to_ast(Str, TabWidth, FileFormat) ->
+    {ok, Toks, _} = wrangler_scan:string(Str, {1,1}, TabWidth, FileFormat),
+    {ok, Form} = wrangler_parse:parse(Toks),
+    assert_tree_without_errors(Form, {string_to_ast, wrangler_parse}),
+    Forms = [Form],
+    SyntaxTree = wrangler_recomment:recomment_forms(Forms, []),
+    AnnAst = annotate_bindings(Str, SyntaxTree, TabWidth, FileFormat),
+    assert_tree_without_errors(AnnAst, {string_to_ast, annotate_bindings}),
+    {ok, AnnAst}.
+
+annotate_bindings(Str, AST, TabWidth, FileFormat) ->
+    Info = wrangler_syntax_lib:analyze_forms(AST),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    Exprs = replace_dots_with_comma_keep_last(Toks),
-    Str2 = erlang:iolist_to_binary("consult()->" ++ wrangler_misc:concat_toks(Exprs)),
-    TmpFilename = tmp_filenate(),
-    ok = file:write_file(TmpFilename, Str2),
-    {ok, {AnnAST,_Info}} = try
-            wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat)
-        after
-            ok = file:delete(TmpFilename)
-        end,
-    {ok, AnnAST}.
+    Ann = wrangler_ast_server:add_token_and_ranges(AST, Toks),
+    AnnAST0 = wrangler_syntax_lib:annotate_bindings(Ann, ordsets:new()),
+    Comments = wrangler_comment_scan:string(Str),
+    AnnAST1 = wrangler_recomment:recomment_forms(AnnAST0, Comments),
+    AnnAST2 = wrangler_ast_server:update_toks(Toks,AnnAST1),
+    AnnAST3 = wrangler_annotate_ast:add_fun_define_locations(AnnAST2, Info).
+
+is_comment_or_whitespace({whitespace,_,_}) -> true;
+is_comment_or_whitespace({comment,_,_}) -> true;
+is_comment_or_whitespace(_) -> false.
+
+
+string_to_ast1(Str, TabWidth, FileFormat) ->
+    with_tmpfile(fun(TmpFilename) ->
+        ok = file:write_file(TmpFilename, Str),
+        {ok, {AnnAST,_Info}} =
+                %% Does not work correctly with consult_binary4()
+                wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
+%               wrangler_ast_server:quick_parse_annotate_file(TmpFilename, [], 4),
+        {ok, AnnAST}
+        end).
+
+%% @doc Convert terms to AST
+consult_terms(Terms) ->
+    String = terms_to_string(Terms),
+    consult_string(String).
+
+%% @doc Convert string to AST
+consult_string(String) ->
+    TmpFilename = tmp_filename(),
+    ok = file:write_file(TmpFilename, String),
+    try
+        consult(TmpFilename)
+    after
+        ok = file:delete(TmpFilename)
+    end.
+
+terms_to_tokens(Terms, FileFormat) ->
+    TabWidth = 4,
+    Str = iolist_to_list(terms_to_string(Terms)),
+    {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
+    {ok, Toks}.
+
+terms_to_string(Terms) ->
+    [io_lib:format("~p.~n", [X]) || X <- Terms].
+
 
 unlift_funs_from_ast(AnnAST) ->
     Elems = wrangler_syntax:form_list_elements(AnnAST),
@@ -37,14 +103,37 @@ write_file(FilenameOrig, AnnAST) ->
     write_file(FilenameOrig, FileNameOut, AnnAST).
 
 write_file(FilenameOrig, FileNameOut, AnnAST) ->
+    assert_tree_without_errors(AnnAST, {write_file, bad_input}),
     TabWidth = 4,
     FileFormat = wrangler_misc:file_format(FilenameOrig),
     Bin = list_to_binary(wrangler_prettypr:print_ast(FileFormat, AnnAST, TabWidth)),
     Bin2 = replace_commas_with_dots(Bin, TabWidth, FileFormat),
-    <<"consult()->", Bin3/binary>>  = Bin2,
+    Bin3 = remove_consult(Bin2),
     file:write_file(FileNameOut, Bin3).
 
-tmp_filenate() ->
+remove_consult(Bin) ->
+    Bin1 = remove_whitespace(Bin),
+    Bin2 = remoce_consult_fun(Bin1),
+    Bin3 = remove_whitespace(Bin2),
+    Bin4 = remove_arrow(Bin3),
+    remove_whitespace(Bin4).
+
+remove_whitespace(<<" ", T/binary>>) ->
+    remove_whitespace(T);
+remove_whitespace(<<"\r", T/binary>>) ->
+    remove_whitespace(T);
+remove_whitespace(<<"\n", T/binary>>) ->
+    remove_whitespace(T);
+remove_whitespace(T) ->
+    T.
+
+remoce_consult_fun(<<"consult()", T/binary>>) ->
+    T.
+
+remove_arrow(<<"->", T/binary>>) ->
+    T.
+
+tmp_filename() ->
     string:strip(os:cmd("mktemp"), right, $\n).
 
 
@@ -82,13 +171,14 @@ get_delimitor(FileFormat) ->
 
 %% Replaces dots on the top level only
 replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
+    Str = binary_to_list(Bin),
     %% Get actual AST
-    TmpFilename = tmp_filenate(),
-    ok = file:write_file(TmpFilename, Bin),
-    {ok, {AnnAST,_Info}} = wrangler_ast_server:parse_annotate_file(TmpFilename, false, [], TabWidth, FileFormat),
-    Str = erlang:binary_to_list(Bin),
+    {ok, AnnAST} = string_to_ast(Str, TabWidth, FileFormat),
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
-    FunAST = hd(wrangler_syntax:form_list_elements(AnnAST)),
+%   io:format(user, "Node types ~p~n", [[wrangler_syntax:type(Node)
+%                                        || Node <- wrangler_syntax:form_list_elements(AnnAST)]]),
+    FunAST = hd([Node || Node <- wrangler_syntax:form_list_elements(AnnAST),
+                         lists:member(wrangler_syntax:type(Node), [function,eof_marker])]),
     ClauseAST = hd(wrangler_syntax:function_clauses(FunAST)),
     ExprASTs = wrangler_syntax:clause_body(ClauseAST),
     EndLocs = [get_range_end(ExprAST) || ExprAST <- ExprASTs],
@@ -98,7 +188,7 @@ replace_commas_with_dots(Bin, TabWidth, FileFormat) ->
 %   io:format("~nComLocs ~10000p ~nEndLocs ~10000p ~n", [AllCommaLocs, EndLocs]),
 
     Toks2 = replace_commas(Toks, ExpectedCommasLocs),
-    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks2)).
+    toks_to_binary(Toks2).
 
 %% Replace commans based on their location
 replace_commas([{',', CommaLoc}|Toks], MatchLocs) ->
@@ -144,3 +234,33 @@ expected_comma_logs([], _) ->
 list_init(List) ->
     [_|R] = lists:reverse(List),
     lists:reverse(R).
+
+toks_to_binary(Toks) ->
+    erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)).
+
+iolist_to_list(X) ->
+    erlang:binary_to_list(erlang:iolist_to_binary(X)).
+
+with_tmpfile(F) ->
+    Filename = tmp_filename(),
+    try
+        F(Filename)
+    after
+        file:delete(Filename)
+    end.
+
+assert_tree_without_errors(Tree, Meta) ->
+    Errors = api_ast_traverse:fold(fun(T, Errors) ->
+            case wrangler_syntax:type(T) of
+                error_marker ->
+                    [T|Errors];
+                _ ->
+                    Errors
+            end
+        end, [], Tree),
+    case Errors of
+        [] -> ok;
+        [_|_] ->
+            [io:format(user, "assert_tree_without_errors ~p~n", [E]) || E <- Errors],
+            erlang:error({assert_tree_without_errors, Meta})
+    end.

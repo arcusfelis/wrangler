@@ -182,7 +182,7 @@
 	 set_name/2, set_pos/2, set_postcomments/2,
 	 set_precomments/2, size_qualifier/2,
 	 size_qualifier_argument/1, size_qualifier_body/1,
-	 string/1, string_literal/1, string_value/1, subtrees/1,
+	 string/1, string_literal/1, string_value/1, string_concrete/1, subtrees/1,
 	 text/1, text_string/1, tree/1, tree/2, try_after_expr/2,
 	 try_expr/2, try_expr/3, try_expr/4, try_expr_after/1,
 	 try_expr_body/1, try_expr_clauses/1,
@@ -190,7 +190,8 @@
 	 tuple_size/1, type/1, underscore/0, update_tree/2,
 	 variable/1, variable_literal/1, variable_name/1,
 	 warning_marker/1, warning_marker_info/1,
-	 default_literals_vars/2, empty_node/0]).
+	 default_literals_vars/2, empty_node/0,
+     update_ann/2]).
 	
 %% =====================================================================
 %% IMPLEMENTATION NOTES:
@@ -1610,7 +1611,7 @@ char_literal(Node) ->
 string(String) -> tree(string, String).
 
 revert_string(Node) ->
-    Pos = get_pos(Node), {string, Pos, string_value(Node)}.
+    Pos = get_pos(Node), {string, Pos, string_literal(Node)}.
 
 %% =====================================================================
 %% @spec is_string(Node::syntaxTree(), Value::string()) -> bool()
@@ -1632,14 +1633,38 @@ is_string(Node, Value) ->
 %% @spec string_value(syntaxTree()) -> string()
 %%
 %% @doc Returns the value represented by a <code>string</code> node.
+%%      The value is not a real term, but text representation.
+%%      The value is all characters between double quotes.
 %%
 %% @see string/1
+%% @see string_concrete/1
 
 string_value(Node) ->
+    string_escaped(Node).
+
+%% Return without any processing
+string_escaped(Node) ->
     case unwrap(Node) of
       {string, _, List} -> List;
       Node1 -> data(Node1)
     end.
+
+%% @spec string_concrete(syntaxTree()) -> string()
+%% @doc Returns string as a term
+%%
+%% erl_syntax:string_value/1 returns the same result
+string_concrete(Node) ->
+    string_unescaped(Node).
+
+string_unescaped(Node) ->
+    unescape_string(string_escaped(Node)).
+
+unescape_string([$\\,H|T]) ->
+    [wrangler_scan:escape_char(H)|unescape_string(T)];
+unescape_string([H|T]) ->
+    [H|unescape_string(T)];
+unescape_string([]) ->
+    [].
 
 %% =====================================================================
 %% @spec string_literal(syntaxTree()) -> string()
@@ -1650,7 +1675,7 @@ string_value(Node) ->
 %% @see string/1
 
 string_literal(Node) ->
-    io_lib:write_string(string_value(Node)).
+    "\"" ++ string_escaped(Node) ++ "\"".
 
 %% =====================================================================
 %% @spec atom(Name) -> syntaxTree()
@@ -2526,8 +2551,19 @@ binary_field(Body, Size, Types) ->
 binary_field(Body, Types) ->
     tree(binary_field,
 	 #binary_field{body = update_ann({syntax_path, binary_field_body}, Body), 
-                       types = [update_ann({syntax_path, binary_field_type}, T)
-                                ||T<-Types]}).
+                       types = [update_binary_type_ann(T) ||T<-Types]}).
+
+update_binary_type_ann(T) ->
+    case type(T) of
+    size_qualifier ->
+        Size = size_qualifier_argument(T),
+        Body = size_qualifier_body(T),
+        Body2 = update_binary_type_ann(Body),
+        size_qualifier(Body2, Size);
+    _ ->
+        update_ann({syntax_path, binary_field_type}, T)
+    end.
+
 
 revert_binary_field(Node) ->
     Pos = get_pos(Node),
@@ -5926,7 +5962,16 @@ abstract(T) when is_tuple(T) ->
 abstract(T) when is_binary(T) ->
     binary([binary_field(integer(B))
 	    || B <- binary_to_list(T)]);
+abstract(T) when is_bitstring(T) ->
+    binary([abstract_binary_field(X) || X <- erlang:bitstring_to_list(T)]);
 abstract(T) -> erlang:error({badarg, T}).
+
+abstract_binary_field(X) when is_integer(X) ->
+    binary_field(integer(X));
+abstract_binary_field(X) when is_bitstring(X) ->
+    Bits = erlang:bit_size(X),
+    <<Int:Bits>> = X,
+    binary_field(integer(Int), integer(Bits), []).
 
 abstract_list([T | Ts]) ->
     [abstract(T) | abstract_list(Ts)];
@@ -5961,40 +6006,85 @@ abstract_tail(H, T) -> cons(abstract(H), abstract(T)).
 %% @see abstract/1
 %% @see is_literal/1
 %% @see char/1
-
 concrete(Node) ->
+    case proplists:get_value(overwrite_concrete, get_ann(Node)) of
+        undefined ->
+            concrete1(Node);
+        {value, Value} ->
+            Value;
+        {error, Error} ->
+            erlang:error(Error)
+    end.
+
+concrete1(Node) ->
     case type(Node) of
       atom -> atom_value(Node);
       integer -> integer_value(Node);
       float -> float_value(Node);
       char -> char_value(Node);
-      string -> string_value(Node);
+      string -> string_concrete(Node);
       nil -> [];
       list ->
 	  [concrete(list_head(Node)) | concrete(list_tail(Node))];
       tuple ->
 	  list_to_tuple(concrete_list(tuple_elements(Node)));
       binary ->
-	  Fs =
+      Fs = binary_fields(Node),
+      Fs1 = replace_strings_in_binary_fields_with_integers(Fs),
+	  Fs2 =
 	      [revert_binary_field(binary_field(binary_field_body(F),
 						case binary_field_size(F) of
 						  none -> none;
 						  S -> revert(S)
 						end,
 						binary_field_types(F)))
-	       || F <- binary_fields(Node)],
-	  {value, B, _} = eval_bits:expr_grp(Fs, [],
+	       || F <- Fs1],
+	  {value, B, _} = eval_bits:expr_grp(Fs2, [],
 					     fun (F, _) ->
-						     {value, concrete(F), []}
+						     {value, concrete_field(F), []}
 					     end,
 					     [], true),
-	  B;
+      B;
+      binary_field ->
+      %% not concrete_field/1 because we want to be compatible
+      %% with erl_parse output
+      concrete(binary_field_body(Node));
       _ -> erlang:error({badarg, Node})
     end.
+
+%% Note: body contains escaped string (not like in otp)
+%% {ok, Tokens1, _} = erl_scan:string("<<\"\\n\">>.").
+%% {ok,[{'<<',1},{string,1,"\n"},{'>>',1},{dot,1}],1}
+%% {ok, Tokens2, _} = wrangler_scan:string("<<\"\\n\">>.").
+%% {ok,[{'<<',{1,1}}, {string,{1,3},"\\n"}, {'>>',{1,7}}, {dot,{1,9}}], {1,9}}
+%%
+%% Example: <<"string", 1,2,3>>
+%% "string" is a string in binary.
+replace_strings_in_binary_fields_with_integers(Fs) ->
+    lists:flatmap(fun replace_string_in_binary_fields_with_integers/1, Fs).
+
+replace_string_in_binary_fields_with_integers(F) ->
+    Body = binary_field_body(F),
+    case type(Body) of
+        string ->
+            String = concrete(Body),
+            [binary_field(integer(Byte)) || Byte <- String];
+        _ ->
+            [F]
+    end.
+
 
 concrete_list([E | Es]) ->
     [concrete(E) | concrete_list(Es)];
 concrete_list([]) -> [].
+
+concrete_field(F) ->
+    case type(F) of
+        size_qualifier ->
+            concrete(size_qualifier_body(F));
+        _ ->
+            concrete(F)
+    end.
 
 %% =====================================================================
 %% @spec is_literal(Node::syntaxTree()) -> bool()

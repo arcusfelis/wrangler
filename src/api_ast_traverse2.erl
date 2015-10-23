@@ -7,10 +7,13 @@
          flatmap_values_with_path/2,
          flatmap_values_with_path_values/2,
          flatfoldmap_values_with_path_values/3,
-         fold_values_with_path_values/3]).
+         fold_values_with_path_values/3,
+         overwrite_concretes/1]).
 
-%% debug
--export([eval_wrangler_tree/1]).
+%% debug/tests
+-export([tree_to_term/1,
+         tree_to_term_using_parser/1,
+         tree_to_term_using_concrete/1]).
 
 flatmap_subtrees(F, Tree) when is_function(F, 1) ->
     case wrangler_syntax:subtrees(Tree) of
@@ -49,18 +52,18 @@ flatmap_with_path(F, Tree, Path) when is_function(F, 2) ->
 
 %% Recursive flatmap_subtrees/2
 flatmap_values(F, Tree) when is_function(F, 2) ->
-    FF = fun(T) -> try eval_wrangler_tree(T) of {value, X, _} -> F(T, X); _ -> [T] catch _:_ -> [T] end end,
+    FF = fun(T) -> try tree_to_term(T) of {ok, X} -> F(T, X); _ -> [T] catch _:_ -> [T] end end,
     api_ast_traverse2:flatmap(FF, Tree).
 
 flatmap_subvalues(F, Tree) when is_function(F, 2) ->
-    FF = fun(T) -> try eval_wrangler_tree(T) of {value, X, _} -> F(T, X); _ -> [T] catch _:_ -> [T] end end,
+    FF = fun(T) -> try tree_to_term(T) of {ok, X} -> F(T, X); _ -> [T] catch _:_ -> [T] end end,
     api_ast_traverse2:flatmap_subtrees(FF, Tree).
 
 %% Recursive flatmap_subtrees/2 + path
 %% Path is [Parent, Grandparent, ...]
 %% F is F(Tree, Value, Path)
 flatmap_values_with_path(F, Tree) when is_function(F, 3) ->
-    FF = fun(T, P) -> try eval_wrangler_tree(T) of {value, X, _} -> F(T, X, P); _ -> [T] catch _:_ -> [T] end end,
+    FF = fun(T, P) -> try tree_to_term(T) of {ok, X} -> F(T, X, P); _ -> [T] catch _:_ -> [T] end end,
     api_ast_traverse2:flatmap_with_path(FF, Tree).
 
 %% Recursive flatmap_subtrees/2 + path with values
@@ -71,8 +74,8 @@ flatmap_values_with_path_values(F, Tree) when is_function(F, 3) ->
     flatmap_values_with_path_values(F, Tree, []).
 
 flatmap_values_with_path_values(F, Tree, Path) when is_function(F, 3) ->
-    try eval_wrangler_tree(Tree) of
-        {value, Value, _} ->
+    try tree_to_term(Tree) of
+        {ok, Value} ->
             flatmap_values_with_path_values(F, {value, Value}, Tree, Path);
         _ ->
             flatmap_values_with_path_values(F, novalue, Tree, Path)
@@ -110,12 +113,16 @@ flatfoldmap_values_with_path_values(F, Acc, Tree) when is_function(F, 4) ->
     flatfoldmap_values_with_path_values(F, Acc, Tree, []).
 
 flatfoldmap_values_with_path_values(F, Acc, Tree, Path) when is_function(F, 4) ->
-    try eval_wrangler_tree(Tree) of
-        {value, Value, _} ->
+    try tree_to_term(Tree) of
+        {ok, Value} ->
             flatfoldmap_values_with_path_values(F, Acc, {value, Value}, Tree, Path);
         _ ->
             flatfoldmap_values_with_path_values(F, Acc, novalue, Tree, Path)
-        catch _:_ ->
+        catch error:undef ->
+             S = erlang:get_stacktrace(),
+             erlang:raise(error, undef, S);
+        _Class:_Reason ->
+            io:format(user, "Eval error ~p:~p~n", [_Class, _Reason]),
             flatfoldmap_values_with_path_values(F, Acc, novalue, Tree, Path)
     end.
 
@@ -163,22 +170,46 @@ fold_values_with_path_values(F, Acc, Tree) when is_function(F, 4) ->
     {_NewTree, Acc2} = flatfoldmap_values_with_path_values(FF, Acc, Tree),
     Acc2.
 
+tree_to_term(WranglerAST) ->
+    tree_to_term_using_concrete(WranglerAST).
+
+tree_to_term_using_concrete(WranglerAST) ->
+    try
+        Term = wrangler_syntax:concrete(WranglerAST),
+        {ok, Term}
+    catch Class:Reason ->
+        {error, {Class,Reason}}
+    end.
+
 %% erl_eval MUST not be used with wrangler AST trees
 %% It's will eval integers as strings ("1" instead of 1).
 %% WranglerAST is expression tree
-eval_wrangler_tree(WranglerAST) ->
+tree_to_term_using_parser(WranglerAST) ->
     Str = tree_to_string(WranglerAST),
-    string_eval(Str ++ ".", []).
+    string_parse(Str ++ ".").
 
 tree_to_string(WranglerAST) ->
     %% Format does not matter here
     FileFormat = unix,
     TabWidth = 4,
     Io = wrangler_prettypr:pp_a_form(WranglerAST, FileFormat, [], TabWidth),
-    Bin = erlang:iolist_to_binary(Io),
-    erlang:binary_to_list(Bin).
+    iolist_to_list(Io).
 
-string_eval(S, Envs) ->
-    {ok,Forms,_} = erl_scan:string(S),
-    {ok,Exprs} = erl_parse:parse_exprs(Forms),
-    erl_eval:exprs(Exprs, Envs).
+string_parse(S) ->
+    {ok, Tokens, _} = erl_scan:string(S),
+    erl_parse:parse_term(Tokens).
+
+iolist_to_list(X) ->
+    erlang:binary_to_list(erlang:iolist_to_binary(X)).
+
+
+overwrite_concretes(Tree) ->
+    F = fun(Node, _) ->
+                try
+                    Value = wrangler_syntax:concrete(Node),
+                    wrangler_syntax:update_ann({overwrite_concrete, {value,Value}},Node)
+                catch Class:Reason ->
+                    wrangler_syntax:update_ann({overwrite_concrete, {error, {Class,Reason}}},Node)
+                end
+        end,
+    api_ast_traverse:full_buTP(F, Tree, []).
