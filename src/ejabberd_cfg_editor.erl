@@ -11,7 +11,11 @@
          set_listener_option/7,
          unset_listener_option/6,
          add_listener_element/6,
-         delete_listener_element/6]).
+         delete_listener_element/6,
+         set_global_option/5,
+         unset_global_option/4,
+         add_global_element/4,
+         delete_global_element/4]).
 
 run_commands(Commands, Tree, FileFormat, TabWidth) ->
     wrangler_consult:assert_tree_without_errors(Tree, {run_commands, input}),
@@ -50,7 +54,15 @@ run_command({unset_listener_option, Port, Module, OptKey}, Tree, FileFormat, Tab
 run_command({add_listener_element, Port, Module, Element}, Tree, FileFormat, TabWidth) ->
     add_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth);
 run_command({delete_listener_element, Port, Module, Element}, Tree, FileFormat, TabWidth) ->
-    delete_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth).
+    delete_listener_element(Port, Module, Element, Tree, FileFormat, TabWidth);
+run_command({set_global_option, OptKey, OptValue}, Tree, FileFormat, TabWidth) ->
+    set_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth);
+run_command({unset_global_option, OptKey}, Tree, FileFormat, TabWidth) ->
+    unset_global_option(OptKey, Tree, FileFormat, TabWidth);
+run_command({add_global_element, Element}, Tree, FileFormat, TabWidth) ->
+    add_global_element(Element, Tree, FileFormat, TabWidth);
+run_command({delete_global_element, Element}, Tree, FileFormat, TabWidth) ->
+    delete_global_element(Element, Tree, FileFormat, TabWidth).
 
 
 add_module_after(Module, AfterModule, Tree, FileFormat, TabWidth)
@@ -443,3 +455,108 @@ match_listener_options(Port, Module, Tree) ->
                         when P =:= Port, M =:= Module, is_list(Opts) -> [T|A];
                     (_,_,_, A) -> A end,
     api_ast_traverse2:fold_values_with_path_values(MatchOptsF, [], Tree).
+
+
+match_global_option(OptKey, Tree) ->
+    MatchOptF = fun(T,{K,_},[], A) when K =:= OptKey -> [T|A];
+                    (_,_,_, A) -> A end,
+    api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree).
+
+match_global_option_value(OptKey, Tree) ->
+    MatchOptValueF = fun(T,V,[{{K,V},_}], A)
+                        when K =:= OptKey -> [{tree_value,T,V}|A];
+                        (_,_,_, A) -> A end,
+    api_ast_traverse2:fold_values_with_path_values(MatchOptValueF, [], Tree).
+
+match_global_element(Element, Tree) ->
+    MatchElemF = fun(T,E,[], A)
+                        when E =:= Element -> [T|A];
+                    (_,_,_, A) -> A end,
+    api_ast_traverse2:fold_values_with_path_values(MatchElemF, [], Tree).
+
+unset_global_option(OptKey, Tree, FileFormat, TabWidth)
+    when is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    Acc = match_global_option(OptKey, Tree2),
+    unset_global_option_2(OptKey, Tree, FileFormat, TabWidth, Acc).
+
+unset_global_option_2(_OptKey, Tree, _FileFormat, _TabWidth, []) ->
+    {ok, Tree, global_option_is_missing};
+unset_global_option_2(_OptKey, Tree, FileFormat, TabWidth, [OptTree]) ->
+    NewTree = wrangler_token_pp:erase_matched(OptTree, Tree, FileFormat, TabWidth),
+    {ok, NewTree, global_option_deleted}.
+
+
+%% Add or replace global_option
+%% Do nothing if module does not exists
+%% Returns {ok, NewTree, ResultComment}
+%% ResultComment describes which actions were made
+%% OptValue is term, not tree
+%% OptKey is atom
+%% Module is atom
+set_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth)
+    when is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    OptValueAcc = match_global_option_value(OptKey, Tree2),
+    set_global_option_3(OptKey, OptValue, Tree, FileFormat, TabWidth, OptValueAcc).
+
+%% but global_option is not
+set_global_option_3(OptKey, OptValue, Tree, FileFormat, TabWidth, []) ->
+    %% global_option is defined, but it's value is the same
+    append_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth);
+
+%% Compare OptValue
+set_global_option_3(_OptKey, OptValue, Tree, _FileFormat, _TabWidth, [{tree_value,_ValueT,OptValue}]) ->
+    {ok, Tree, global_option_already_updated};
+
+%% Module is defined, global_option is defined too, but it's value is different
+set_global_option_3(OptKey, OptValue, Tree, FileFormat, TabWidth, [{tree_value,ValueT,ValueX}]) ->
+    error_logger:info_msg("global_option_value_replaced, old_value=~p, new_value=~p", [ValueX, OptValue]),
+    replace_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth, ValueT).
+
+replace_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth, ValueT) ->
+    NewTree = wrangler_token_pp:replace_matched(ValueT, Tree, OptValue, FileFormat, TabWidth),
+    {ok, NewTree, global_option_value_replaced}.
+
+append_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth) ->
+    %% OptsTree is list, Tree is the whole list
+    NewElem = {OptKey, OptValue},
+    NewTree = wrangler_token_pp:append_expr(Tree, NewElem, FileFormat, TabWidth),
+    {ok, NewTree, global_option_value_added}.
+
+
+%% Add global_option
+%% Returns {ok, NewTree, ResultComment}
+%% ResultComment describes which actions were made
+%% Element is term, not tree
+%% Used for options like starttls, that have no value.
+%%
+%% Use delete_global_element/6 to undo this operation
+add_global_element(Element, Tree, FileFormat, TabWidth)
+    when is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 = api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    Acc = match_global_element(Element, Tree2),
+    add_global_element(Element, Tree, FileFormat, TabWidth, Acc).
+
+add_global_element(_Element, Tree, _FileFormat, _TabWidth, [_|_]) ->
+    {ok, Tree, global_element_already_added};
+add_global_element(Element, Tree, FileFormat, TabWidth, []) ->
+    NewTree = wrangler_token_pp:append_expr(Tree, Element, FileFormat, TabWidth),
+    {ok, NewTree, global_element_added}.
+
+delete_global_element(Element, Tree, FileFormat, TabWidth)
+    when is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 = api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    Acc = match_global_element(Element, Tree2),
+    delete_global_element(Element, Tree, FileFormat, TabWidth, Acc).
+
+delete_global_element(Element, Tree, FileFormat, TabWidth, [_|_]=Acc) ->
+    NewTree = fold_erase_matched(Acc, Tree, FileFormat, TabWidth),
+    {ok, NewTree, global_element_deleted};
+delete_global_element(_Element, Tree, _FileFormat, _TabWidth, []) ->
+    {ok, Tree, global_element_is_missing}.
+

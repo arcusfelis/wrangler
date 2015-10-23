@@ -73,7 +73,15 @@ run_command({unset_listener_option, P, M, K}, C) ->
 run_command({add_listener_element, P, M, E}, C) ->
     add_listener_element(P, M, E, C);
 run_command({delete_listener_element, P, M, E}, C) ->
-    delete_listener_element(P, M, E, C).
+    delete_listener_element(P, M, E, C);
+run_command({set_global_option, K, V}, C) ->
+    set_global_option(K, V, C);
+run_command({unset_global_option, K}, C) ->
+    unset_global_option(K, C);
+run_command({add_global_element, E}, C) ->
+    add_global_element(E, C);
+run_command({delete_global_element, E}, C) ->
+    delete_global_element(E, C).
 
 
 add_listener(P, M, C) ->
@@ -143,7 +151,7 @@ add_listener_element(P, M, E, C) ->
         false -> C;
         true ->
             Opts = get_value2(P, M, Listeners),
-            case lists:member(E, 1, Opts) of
+            case lists:member(E, Opts) of
                 true ->
                     C;
                 false ->
@@ -159,7 +167,7 @@ delete_listener_element(P, M, E, C) ->
         false -> C;
         true ->
             Opts = get_value2(P, M, Listeners),
-            case lists:member(E, 1, Opts) of
+            case lists:member(E, Opts) of
                 true ->
                     Opts2 = lists:delete(E, Opts),
                     Listeners2 = keyreplace2(P, M, 1, 2, Listeners, {P, M, Opts2}),
@@ -170,10 +178,44 @@ delete_listener_element(P, M, E, C) ->
     end.
 
 
+
+set_global_option(K, V, C) ->
+    case lists:keymember(K, 1, C) of
+        true ->
+            lists:keyreplace(K, 1, C, {K,V});
+        false ->
+            C ++ [{K,V}] %% append new global_option
+    end.
+
+unset_global_option(K, C) ->
+    case lists:keymember(K, 1, C) of
+        true ->
+            lists:keydelete(K, 1, C);
+        false ->
+            C
+    end.
+
+add_global_element(E, C) ->
+    case lists:member(E, C) of
+        true ->
+            C;
+        false ->
+            C ++ [E] %% append new element
+    end.
+
+delete_global_element(E, C) ->
+    case lists:member(E, C) of
+        true ->
+            lists:delete(E, C);
+        false ->
+            C
+    end.
+
+
 %% keysomething2/? functions copied from arcusfelis/lists2
 
 %% @doc `lists:keymember/3' for two elements
-keymember2(A, B, N, M, [H|T]) when element(N, H) =:= A, element(M, H) =:= B ->
+keymember2(A, B, N, M, [H|_]) when element(N, H) =:= A, element(M, H) =:= B ->
     true;
 keymember2(A, B, N, M, [_|T]) ->
     keymember2(A, B, N, M, T);

@@ -2,9 +2,13 @@
 -export([erase_matched/4,
          replace_matched/5,
          append_list_element/5,
-         insert_another_list_element_after/6]).
+         insert_another_list_element_after/6,
+         append_expr/4]).
 
 -export([get_delimiter_forms/1]).
+
+%% Debug
+-export([sub_exprs/1]).
 
 %% Search for `MatchAST' in `AnnAST' to delete it.
 %% FileFormat = wrangler_misc:file_format(Filename)
@@ -52,6 +56,7 @@ ast_to_tokens(FileFormat, AnnAST, TabWidth) ->
     {ok, Toks, _} = wrangler_scan_with_layout:string(Str, {1,1}, TabWidth, FileFormat),
     Toks.
 
+%% Works for lists or expressions
 %% MatchAST = a, AnnAST = [a,b,c], Type = list_prefix, BeforeToks = "[", AfterToks = ",b,c]"
 fix_and_join_toks(list_prefix, BeforeToks, AfterToks) ->
     %% Try to delete next separator
@@ -59,6 +64,16 @@ fix_and_join_toks(list_prefix, BeforeToks, AfterToks) ->
         AfterToks ->
             %% Delete previos separator
             BeforeToks1 = remove_first_list_separator_r(BeforeToks),
+            BeforeToks1 ++ AfterToks;
+        AfterToks1 ->
+            BeforeToks ++ AfterToks1
+    end;
+fix_and_join_toks(body_expr, BeforeToks, AfterToks) ->
+    %% Try to delete next separator
+    case remove_first_expr_separator(AfterToks) of
+        AfterToks ->
+            %% Delete previos separator
+            BeforeToks1 = remove_first_expr_separator_r(BeforeToks),
             BeforeToks1 ++ AfterToks;
         AfterToks1 ->
             BeforeToks ++ AfterToks1
@@ -79,6 +94,22 @@ remove_first_list_separator([{',',_}|Toks]) ->
     Toks;
 remove_first_list_separator([Tok|Toks]) ->
     [Tok|remove_first_list_separator(Toks)].
+
+%% Go backward
+remove_first_expr_separator_r(Toks) ->
+    ToksR = lists:reverse(Toks),
+    ToksR1 = remove_first_expr_separator(ToksR),
+    lists:reverse(ToksR1).
+    
+%% Go forward
+remove_first_expr_separator([{'->',_}|_]=Toks) ->
+    Toks; %% no more list separators, stop
+remove_first_expr_separator([{dot,_}|_]=Toks) ->
+    Toks; %% no more list separators, stop
+remove_first_expr_separator([{',',_}|Toks]) ->
+    Toks;
+remove_first_expr_separator([Tok|Toks]) ->
+    [Tok|remove_first_expr_separator(Toks)].
 
 get_range(Node) ->
      As = wrangler_syntax:get_ann(Node),
@@ -196,6 +227,7 @@ add_another_list_element_after(ListTree, Tree, ElemValueToks, PrevElem, FileForm
             ++ ElemValueToks,
     Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
     tokens_to_ast(Toks2, TabWidth, FileFormat).
+
 
 indent_new_elem(LastS, Toks, TabWidth) ->
     %% Tokens that separate last element from something before
@@ -376,3 +408,34 @@ ast_to_string(FileFormat, Tree, TabWidth) ->
 
 toks_to_binary(Toks) ->
     erlang:iolist_to_binary(wrangler_misc:concat_toks(Toks)).
+
+
+append_expr(Tree, ElemValue, FileFormat, TabWidth) ->
+    PrevElem = last_expr(Tree),
+    append_expr_after(Tree, ElemValue, PrevElem, FileFormat, TabWidth).
+
+append_expr_after(Tree, ElemValue, PrevElem, FileFormat, TabWidth) ->
+    ElemValueToks = term_to_tokens(ElemValue, TabWidth, FileFormat),
+    {PrevS,PrevE} = get_range(PrevElem),
+    %% Get tokens
+    Toks = ast_to_tokens(FileFormat, Tree, TabWidth),
+    %% If we have left comment, that we assume that this comment is for
+    %% the last argument of the list.
+    %% We don't care about multiline comments in the case
+    {CommentToks, Toks1} = cut_line_comment_and_leading_whitespaces(PrevE, Toks),
+    IndentToks = indent_new_elem(PrevS, Toks, TabWidth),
+    ElemValueToks1 = [{',', {1,1}}]
+            ++ CommentToks
+            ++ get_delimiter_forms(FileFormat)
+            ++ IndentToks
+            ++ ElemValueToks,
+    Toks2 = insert_tokens_after(PrevE, ElemValueToks1, Toks1),
+    tokens_to_ast(Toks2, TabWidth, FileFormat).
+
+last_expr(Tree) ->
+    lists:last(sub_exprs(Tree)).
+
+sub_exprs(Tree) ->
+    MatchValF = fun(T,_,[], A) -> [T|A]; (_,_,_, A) -> A end,
+    Acc = api_ast_traverse2:fold_values_with_path_values(MatchValF, [], Tree),
+    lists:reverse(Acc).

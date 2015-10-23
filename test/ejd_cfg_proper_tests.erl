@@ -344,16 +344,16 @@ listen_module() -> readable_module().
 module_module() -> readable_module().
 
 readable_module() ->
-    ?LET(Names, non_empty(arc_types:sublist(5, module_names())),
+    ?LET(Names, non_empty(arc_types:sublist(3, module_names())),
          list_to_atom(string:join(lists:map(fun atom_to_list/1, [mod|Names]), "_"))).
 
 readable_key() ->
-    ?LET(Names, non_empty(arc_types:sublist(5, module_opt_keys())),
+    ?LET(Names, non_empty(arc_types:sublist(3, module_opt_keys())),
          list_to_atom(string:join(lists:map(fun atom_to_list/1, Names), "_"))).
 
 readable_host() ->
     ?LET({Names, Domain},
-         {non_empty(arc_types:sublist(3, module_opt_keys())), oneof(domains())},
+         {non_empty(arc_types:sublist(2, module_opt_keys())), oneof(domains())},
          string:join(lists:map(fun atom_to_list/1, Names ++ [Domain]), ".")).
 
 readable_value() ->
@@ -430,7 +430,12 @@ command() ->
            {set_listener_option, inet_port(), listen_module(), readable_key(), readable_value()},
            {unset_listener_option, inet_port(), listen_module(), readable_key()},
            {add_listener_element, inet_port(), listen_module(), readable_key()},
-           {delete_listener_element, inet_port(), listen_module(), readable_key()}
+           {delete_listener_element, inet_port(), listen_module(), readable_key()},
+
+           {set_global_option, readable_key(), readable_value()},
+           {unset_global_option, readable_key()},
+           {add_global_element, readable_key()},
+           {delete_global_element, readable_key()}
           ]).
 
 %% Spread comments across tokens
