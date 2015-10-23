@@ -431,9 +431,10 @@ command() ->
            {unset_listener_option, inet_port(), listen_module(), readable_key()},
            {add_listener_element, inet_port(), listen_module(), readable_key()},
            {delete_listener_element, inet_port(), listen_module(), readable_key()},
-
            {set_global_option, readable_key(), readable_value()},
            {unset_global_option, readable_key()},
+           {set_global_prefixed_option, readable_key(), readable_key(), readable_value()},
+           {unset_global_prefixed_option, readable_key(), readable_key()},
            {add_global_element, readable_key()},
            {delete_global_element, readable_key()}
           ]).
