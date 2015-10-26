@@ -14,6 +14,8 @@
          delete_listener_element/6,
          set_global_option/5,
          unset_global_option/4,
+         set_global_prefixed_option/6,
+         unset_global_prefixed_option/5,
          add_global_element/4,
          delete_global_element/4]).
 
@@ -59,6 +61,10 @@ run_command({set_global_option, OptKey, OptValue}, Tree, FileFormat, TabWidth) -
     set_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth);
 run_command({unset_global_option, OptKey}, Tree, FileFormat, TabWidth) ->
     unset_global_option(OptKey, Tree, FileFormat, TabWidth);
+run_command({set_global_prefixed_option, OptPrefix, OptKey, OptValue}, Tree, FileFormat, TabWidth) ->
+    set_global_prefixed_option(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth);
+run_command({unset_global_prefixed_option, OptPrefix, OptKey}, Tree, FileFormat, TabWidth) ->
+    unset_global_prefixed_option(OptPrefix, OptKey, Tree, FileFormat, TabWidth);
 run_command({add_global_element, Element}, Tree, FileFormat, TabWidth) ->
     add_global_element(Element, Tree, FileFormat, TabWidth);
 run_command({delete_global_element, Element}, Tree, FileFormat, TabWidth) ->
@@ -468,6 +474,17 @@ match_global_option_value(OptKey, Tree) ->
                         (_,_,_, A) -> A end,
     api_ast_traverse2:fold_values_with_path_values(MatchOptValueF, [], Tree).
 
+match_global_prefixed_option(OptPrefix, OptKey, Tree) ->
+    MatchOptF = fun(T,{P,K,_},[], A) when P =:= OptPrefix, K =:= OptKey -> [T|A];
+                    (_,_,_, A) -> A end,
+    api_ast_traverse2:fold_values_with_path_values(MatchOptF, [], Tree).
+
+match_global_prefixed_option_value(OptPrefix, OptKey, Tree) ->
+    MatchOptValueF = fun(T,V,[{{P,K,V},_}], A)
+                        when P =:= OptPrefix, K =:= OptKey -> [{tree_value,T,V}|A];
+                        (_,_,_, A) -> A end,
+    api_ast_traverse2:fold_values_with_path_values(MatchOptValueF, [], Tree).
+
 match_global_element(Element, Tree) ->
     MatchElemF = fun(T,E,[], A)
                         when E =:= Element -> [T|A];
@@ -525,6 +542,61 @@ append_global_option(OptKey, OptValue, Tree, FileFormat, TabWidth) ->
     NewElem = {OptKey, OptValue},
     NewTree = wrangler_token_pp:append_expr(Tree, NewElem, FileFormat, TabWidth),
     {ok, NewTree, global_option_value_added}.
+
+
+
+unset_global_prefixed_option(OptPrefix, OptKey, Tree, FileFormat, TabWidth)
+    when is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    Acc = match_global_prefixed_option(OptPrefix, OptKey, Tree2),
+    unset_global_prefixed_option_2(OptPrefix, OptKey, Tree, FileFormat, TabWidth, Acc).
+
+unset_global_prefixed_option_2(_OptPrefix, _OptKey, Tree, _FileFormat, _TabWidth, []) ->
+    {ok, Tree, global_prefixed_option_is_missing};
+unset_global_prefixed_option_2(_OptPrefix, _OptKey, Tree, FileFormat, TabWidth, [OptTree]) ->
+    NewTree = wrangler_token_pp:erase_matched(OptTree, Tree, FileFormat, TabWidth),
+    {ok, NewTree, global_prefixed_option_deleted}.
+
+
+%% Add or replace global_prefixed_option
+%% Do nothing if module does not exists
+%% Returns {ok, NewTree, ResultComment}
+%% ResultComment describes which actions were made
+%% OptValue is term, not tree
+%% OptKey is atom
+%% Module is atom
+set_global_prefixed_option(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth)
+    when is_integer(TabWidth), is_atom(FileFormat) ->
+    Tree1 =  api_ast_traverse:map(fun wrangler_syntax:compact_list/1, Tree),
+    Tree2 = api_ast_traverse2:overwrite_concretes(Tree1),
+    OptValueAcc = match_global_prefixed_option_value(OptPrefix, OptKey, Tree2),
+    set_global_prefixed_option_3(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth, OptValueAcc).
+
+%% but global_prefixed_option is not
+set_global_prefixed_option_3(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth, []) ->
+    %% global_prefixed_option is defined, but it's value is the same
+    append_global_prefixed_option(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth);
+
+%% Compare OptValue
+set_global_prefixed_option_3(_OptPrefix, _OptKey, OptValue, Tree, _FileFormat, _TabWidth, [{tree_value,_ValueT,OptValue}]) ->
+    {ok, Tree, global_prefixed_option_already_updated};
+
+%% Module is defined, global_prefixed_option is defined too, but it's value is different
+set_global_prefixed_option_3(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth, [{tree_value,ValueT,ValueX}]) ->
+    error_logger:info_msg("global_prefixed_option_value_replaced, old_value=~p, new_value=~p", [ValueX, OptValue]),
+    replace_global_prefixed_option(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth, ValueT).
+
+replace_global_prefixed_option(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth, ValueT) ->
+    NewTree = wrangler_token_pp:replace_matched(ValueT, Tree, OptValue, FileFormat, TabWidth),
+    {ok, NewTree, global_prefixed_option_value_replaced}.
+
+append_global_prefixed_option(OptPrefix, OptKey, OptValue, Tree, FileFormat, TabWidth) ->
+    %% OptsTree is list, Tree is the whole list
+    NewElem = {OptPrefix, OptKey, OptValue},
+    NewTree = wrangler_token_pp:append_expr(Tree, NewElem, FileFormat, TabWidth),
+    {ok, NewTree, global_prefixed_option_value_added}.
+
 
 
 %% Add global_option
